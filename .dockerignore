@@ -1,0 +1,8 @@
+.git
+.idea
+_reference
+data
+target
+.env
+deploy/certs
+*.log

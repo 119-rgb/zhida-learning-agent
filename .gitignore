@@ -1,0 +1,14 @@
+.idea/
+.vscode/
+*.iml
+.env
+target/
+data/
+logs/
+node_modules/
+dist/
+*.log
+!.env.example
+deploy/certs/
+_reference/
+tmp/

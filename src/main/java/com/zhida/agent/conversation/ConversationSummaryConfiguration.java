@@ -1,0 +1,42 @@
+package com.zhida.agent.conversation;
+
+import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+
+import java.util.concurrent.Executor;
+
+@Configuration(proxyBeanMethods = false)
+@ConditionalOnProperty(
+        prefix = "zhida",
+        name = {"ai.enabled", "persistence.enabled", "conversation-summary.enabled"},
+        havingValue = "true"
+)
+public class ConversationSummaryConfiguration {
+
+    @Bean(name = "conversationSummaryExecutor")
+    Executor conversationSummaryExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(1);
+        executor.setMaxPoolSize(1);
+        executor.setQueueCapacity(20);
+        executor.setThreadNamePrefix("conversation-summary-");
+        executor.initialize();
+        return executor;
+    }
+
+    @Bean
+    ConversationSummarizer conversationSummarizer(ChatModel chatModel) {
+        return prompt -> {
+            var response = chatModel.call(new Prompt(new UserMessage(prompt)));
+            if (response == null || response.getResult() == null || response.getResult().getOutput() == null) {
+                throw new IllegalStateException("摘要模型没有返回内容");
+            }
+            return response.getResult().getOutput().getText();
+        };
+    }
+}

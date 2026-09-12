@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="知答：能够联网搜索、阅读网页和检索本地文档的学习研究助手。">
+    <title>知答 · 学习与研究助手</title>
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="authModal" class="auth-modal" hidden aria-hidden="true">
+    <section id="authPanel" class="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="authTitle" aria-describedby="authDescription">
+        <div class="auth-brand">
+            <span class="auth-brand-mark" aria-hidden="true">知</span>
+            <span>知答</span>
+        </div>
+        <div class="auth-heading">
+            <h1 id="authTitle">欢迎使用知答</h1>
+            <p id="authDescription">登录后，你的对话、知识库和学习偏好都会单独保存。</p>
+        </div>
+        <p id="authStatus" role="status" aria-live="polite">登录或注册后继续，也可以先以游客身份体验。</p>
+        <form id="authForm">
+            <label class="field-label" for="username">用户名</label>
+            <input id="username" placeholder="3～32 位字母、数字或下划线" pattern="[A-Za-z0-9_]{3,32}" autocomplete="username" required>
+            <label class="field-label" for="password">密码</label>
+            <input id="password" type="password" placeholder="至少 8 个字符" minlength="8" maxlength="64" autocomplete="current-password" required>
+            <div class="auth-actions">
+                <button class="auth-primary" type="submit" value="login">登录</button>
+                <button class="auth-secondary" type="submit" value="register">注册账号</button>
+            </div>
+        </form>
+        <div class="auth-divider"><span>暂时不注册</span></div>
+        <button id="guestLogin" class="auth-guest" type="button">以游客身份体验</button>
+        <p class="auth-note">游客数据仅用于本次体验，正式使用建议注册账号。</p>
+    </section>
+</div>
+
+<div class="app-shell">
+    <aside id="sidebar" class="sidebar">
+        <div class="brand-row">
+            <div class="brand-mark" aria-hidden="true">知</div>
+            <div><strong>知答</strong><span>学习与研究助手</span></div>
+            <button id="closeSidebar" class="icon-button close-sidebar" type="button" aria-label="关闭侧栏">×</button>
+        </div>
+
+        <button id="newChatButton" class="new-chat-button" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+            开启新对话
+        </button>
+        <nav class="conversation-nav" aria-label="对话列表">
+            <span class="section-label">对话</span>
+            <div id="conversationHistory"></div>
+            <button class="conversation-item active" type="button">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6.5h14v10H9l-4 3v-13Z"/></svg>
+                <span>当前对话</span>
+            </button>
+        </nav>
+
+        <section class="knowledge-card" aria-labelledby="knowledgeTitle">
+            <div class="knowledge-heading">
+                <div><span class="section-label">我的资料</span><h2 id="knowledgeTitle">本地知识库</h2></div>
+                <span id="documentCount" class="document-count">0</span>
+            </div>
+            <p id="knowledgeStatus" class="card-description">上传资料后，可以直接询问文档内容。</p>
+            <label class="upload-button" for="documentFile">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M5 14v5h14v-5"/></svg>
+                上传 PDF / TXT / MD
+            </label>
+            <input id="documentFile" type="file" accept=".pdf,.txt,.md,.markdown">
+            <label class="field-label" for="baseSelect">当前知识库</label>
+            <select id="baseSelect"><option value="default">默认知识库</option></select>
+            <details class="settings-disclosure">
+                <summary><span>新建知识库</span><span class="summary-hint">添加</span></summary>
+                <form id="baseForm">
+                    <label class="field-label" for="baseName">知识库名称</label>
+                    <div class="inline-form"><input id="baseName" maxlength="100" required><button type="submit" class="compact-button">创建</button></div>
+                </form>
+            </details>
+            <div id="documentList"></div>
+        </section>
+
+        <details id="memoryPanel" class="knowledge-card" hidden>
+            <summary><span>希望知答记住的事</span><span class="summary-hint">可选</span></summary>
+            <div class="memory-content">
+                <label class="switch-row" for="memoryEnabled">
+                    <span><strong>参考已保存记忆</strong><small>默认关闭，开启后用于新问题</small></span>
+                    <input id="memoryEnabled" class="switch-input" type="checkbox">
+                </label>
+                <p class="card-description">保存学习目标或回答偏好，新对话可参考最近 5 条。删除后不再带入。</p>
+                <form id="memoryForm">
+                    <label class="field-label" for="memoryContent">添加一条记忆</label>
+                    <textarea id="memoryContent" maxlength="500" required placeholder="例如：我是 Java 初学者，请多举例子。"></textarea>
+                    <button type="submit" class="upload-button">保存记忆</button>
+                </form>
+                <p id="memoryStatus" role="status"></p>
+                <div id="memoryList"></div>
+            </div>
+        </details>
+        <div class="sidebar-footer">
+            <div class="service-state"><span id="modeDot" class="status-dot"></span><span id="modeBadge">正在检查服务</span></div>
+            <div id="accountSummary" class="account-summary" hidden>
+                <span id="accountAvatar" class="account-avatar" aria-hidden="true">访</span>
+                <span class="account-copy"><strong id="accountName">未登录</strong><small id="accountHint">登录后保存个人数据</small></span>
+                <button id="openAuth" class="account-action" type="button">登录</button>
+                <button id="logout" class="account-action" type="button" hidden>退出</button>
+            </div>
+        </div>
+    </aside>
+
+    <button id="sidebarOverlay" class="sidebar-overlay" type="button" aria-label="关闭侧栏"></button>
+
+    <section class="workspace">
+        <header class="topbar">
+            <button id="openSidebar" class="icon-button menu-button" type="button" aria-label="打开侧栏">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+            </button>
+            <div class="topbar-title"><strong>知答</strong><span>我会把过程讲得简单一点</span></div>
+            <div class="capability-pills" aria-label="可用能力"><span>知识库</span><span id="searchCapability">联网</span></div>
+        </header>
+
+        <main id="messages" class="messages" aria-live="polite">
+            <section id="welcome" class="welcome">
+                <div class="welcome-mark" aria-hidden="true">知</div>
+                <h1>有什么可以帮你的？</h1>
+                <p>可以直接提问，也可以先上传自己的资料。我会边查边讲，让过程看得懂。</p>
+                <div class="suggestion-grid">
+                    <button type="button" data-prompt="用小白能听懂的方式解释什么是 RAG，并举一个生活中的例子。">
+                        <span class="suggestion-icon blue">懂</span><span><strong>讲懂一个概念</strong><small>用例子和类比说明</small></span>
+                    </button>
+                    <button type="button" data-prompt="帮我比较 Spring AI 和 LangChain4j，告诉我现阶段更适合学哪个。">
+                        <span class="suggestion-icon violet">比</span><span><strong>比较两个方案</strong><small>查资料后给出建议</small></span>
+                    </button>
+                    <button type="button" data-prompt="总结我上传的文档，列出最重要的三个观点。">
+                        <span class="suggestion-icon green">文</span><span><strong>阅读我的资料</strong><small>总结并标出出处</small></span>
+                    </button>
+                </div>
+            </section>
+        </main>
+
+        <footer class="composer-shell">
+            <form id="questionForm" class="composer">
+                <textarea id="question" maxlength="8000" rows="1" placeholder="给知答发消息" aria-label="输入问题" required></textarea>
+                <div class="composer-footer">
+                    <div class="composer-hint"><span class="sparkle" aria-hidden="true">✦</span><span id="statusText">输入问题开始</span></div>
+                    <button id="stopButton" type="button" class="upload-button" hidden>停止回答</button>
+                    <button id="submitButton" class="send-button" type="submit" aria-label="发送问题">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 12 6-6 6 6M12 6v12"/></svg>
+                    </button>
+                </div>
+            </form>
+            <p class="disclaimer">知答可能会犯错，重要信息请核对来源。</p>
+        </footer>
+    </section>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>
