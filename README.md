@@ -51,7 +51,7 @@ mvn spring-boot:run
 ```powershell
 $env:ZHIDA_AI_ENABLED="true"
 $env:ZHIDA_SUMMARY_ENABLED="true"  # 可选，默认开启长对话摘要
-$env:DEEPSEEK_API_KEY="你的DeepSeek Key"
+$env:DEEPSEEK_API_KEY="DeepSeek Key"
 $env:TAVILY_API_KEY="你的Tavily Key"   # 可选，联网搜索才需要
 mvn spring-boot:run
 ```
@@ -60,7 +60,6 @@ mvn spring-boot:run
 
 本地知识库的向量计算不使用 DeepSeek，也不需要新增 Key。模型首次下载后缓存在 `data/models/`；原文件和向量数据分别保存在 `data/uploads/`、`data/vector/`，这些目录已被 Git 忽略。
 
-密钥只设置在环境变量中，不要写进 `application.yml`，也不要提交到 Git。
 
 ## 接口
 
