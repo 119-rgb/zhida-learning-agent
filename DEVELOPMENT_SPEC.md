@@ -1,3 +1,5 @@
+> 2026-09-15：已批准迁移为 LangChain4j + Spring MVC + 远程 Embedding。当前技术表已更新；历史验收叙述保留为旧版记录，最新状态以 docs/PROJECT_STATUS.md 与当前源码为准。
+
 # 知答：通用学习与研究 Agent 开发 Spec
 
 > 文档状态：已确认，可执行  
@@ -113,7 +115,7 @@ ResearchOrchestrator
 
 MySQL：用户、会话、消息、任务、步骤、工具调用、来源、文档元数据
 文件目录：用户上传的原始文档
-SimpleVectorStore：MVP 本地演示；部署版后续迁移到持久化向量数据库
+LangChain4j InMemoryEmbeddingStore：MVP 本地演示；部署版后续迁移到持久化向量数据库
 ```
 
 ### 5.1 为什么选择模块化单体
@@ -135,13 +137,13 @@ SimpleVectorStore：MVP 本地演示；部署版后续迁移到持久化向量�
 | --- | --- |
 | Java | JDK 17 |
 | Web 框架 | Spring Boot 3.5.x |
-| Agent | Spring AI Alibaba Agent Framework 1.1.2.2 |
-| Spring AI | 1.1.2，由 BOM 管理 |
-| 模型 | DeepSeek，通过 Spring AI `ChatModel` 抽象（官方 DeepSeek starter） |
+| Agent | LangChain4j 1.20.0 + Java 工具调用循环 |
+| AI 接入库 | LangChain4j 1.20.0，显式 Maven 版本 |
+| 模型 | DeepSeek 兼容 API，通过 LangChain4j `StreamingChatModel` |
 | 数据访问 | MyBatis-Plus + MySQL 8 |
-| 流式输出 | Spring WebFlux SSE |
-| 文档解析 | Spring AI DocumentReader；PDFBox/Tika 按需要补充 |
-| 向量存储 | MVP：SimpleVectorStore；部署升级：Redis Vector 或 PgVector |
+| 流式输出 | Spring MVC SseEmitter |
+| 文档解析 | PDFBox 3.0.5，按页解析 PDF；Java 读取 TXT/Markdown |
+| 向量存储 | MVP：LangChain4j InMemoryEmbeddingStore；部署升级：Redis Vector 或 PgVector |
 | 搜索 | `SearchProvider` 接口；首个真实适配器为 Tavily REST API |
 | 网页读取 | Jsoup，限制正文长度并过滤脚本/样式 |
 | 前端 | Vue 3 + TypeScript + Vite |
@@ -334,7 +336,7 @@ MVP 支持：PDF、TXT、Markdown。DOCX 放在增强阶段。
 
 默认限制：单文件不超过 20 MB；单用户最多 20 个文档；重复 SHA-256 文件提示复用或跳过。
 
-首版使用 `SimpleVectorStore` 保存/加载本地 JSON，仅用于学习和演示。公网部署前必须在文档中明确这一限制；如需要多实例或更可靠持久化，再迁移到 Redis Vector 或 PgVector。
+首版使用 `LangChain4j InMemoryEmbeddingStore` 保存/加载本地 JSON，仅用于学习和演示。公网部署前必须在文档中明确这一限制；如需要多实例或更可靠持久化，再迁移到 Redis Vector 或 PgVector。
 
 ## 11. SSE 事件协议
 
@@ -556,7 +558,7 @@ Codex 实现 `SearchProvider`、Tavily 适配器、Fake Provider 和 Jsoup Reade
 
 Codex 完成上传校验、文档切片、向量写入和 KnowledgeTool；用户负责准备测试文档并核对检索结果。
 
-当前进度：已完成 MVP。支持 PDF/TXT/Markdown、20MB 限制、SHA-256 去重、本地中文 BGE ONNX Embedding、`SimpleVectorStore` JSON 持久化、文档列表页面和 `knowledge_search` 工具。文档保存后返回 `PROCESSING`，后台完成解析和索引；支持状态查询、失败重试，以及服务重启后将遗留任务标记为 `FAILED`。真实 Markdown 与真实 PDF 上传均已验收；PDF 唯一句子在重启前后都能命中，并返回文件名、第 1 页和分块元数据。自动化测试使用真实 PDF 解析器验证目录恢复，实际 HTTP 验收覆盖本地 BGE 向量化与向量文件持久化。
+当前进度：已完成 MVP。支持 PDF/TXT/Markdown、20MB 限制、SHA-256 去重、远程 Embedding API（独立地址、密钥与模型）、`LangChain4j InMemoryEmbeddingStore` JSON 持久化、文档列表页面和 `knowledge_search` 工具。文档保存后返回 `PROCESSING`，后台完成解析和索引；支持状态查询、失败重试，以及服务重启后将遗留处理任务标记为 `FAILED`。删除先持久化为 `DELETING`，向量、文件或目录更新中途失败时保留可重试状态，服务重启后继续幂等清理。真实 Markdown 与真实 PDF 上传均已验收；PDF 唯一句子在重启前后都能命中，并返回文件名、第 1 页和分块元数据。自动化测试使用真实 PDF 解析器验证目录恢复，实际 HTTP 验收覆盖本地 BGE 向量化与向量文件持久化。
 
 验收：测试 PDF 的唯一句子可以被检索；无匹配时不编造。
 
@@ -641,7 +643,7 @@ APP_TASK_TIMEOUT_SECONDS=90
 - [ ] 确认 `DEEPSEEK_API_KEY`；无 Key 时先使用演示模式或 Fake ChatModel。
 - [ ] 确认 `TAVILY_API_KEY`；无 Key 时先使用 Fake SearchProvider。
 - [ ] 创建实际项目源码目录，保留 `_reference` 只读参考。
-- [ ] 使用 BOM 管理 Spring AI Alibaba/Spring AI 兼容版本。
+- [ ] 固定并验证 LangChain4j/PDFBox 与 Java17/Spring Boot3.5.7 兼容版本。
 - [ ] 创建 `.gitignore`，排除 `.env`、`data/`、`target/`、`node_modules/`。
 - [ ] 完成 M0 后再进入 Agent 功能，不提前加入 Redis、MQ 或多 Agent。
 
@@ -656,19 +658,22 @@ APP_TASK_TIMEOUT_SECONDS=90
 - 不包含真实密钥、个人隐私或无法说明来源的项目描述。
 - 用户能够解释：为什么需要 Agent、ReAct 如何循环、工具怎样调用、RAG 怎样检索、SSE 怎样推送、失败怎样恢复以及为什么首版不用多 Agent。
 
-## 25. 实施状态（2026-09-11 更新）
+## 25. 实施状态（2026-09-13 更新）
 
 已实现登录/游客和用户隔离、多知识库切换、文档删除、记忆编辑与默认关闭开关、每日额度、网络短暂故障重试、任务取消接口、过期任务标记中断、任务状态查询及前端断线查询。会话删除已接入前端。认证关闭时仍仅支持本地单用户，不自动迁移旧数据。
 
 新增回归覆盖主动取消、100 条以外历史任务查询、跨 owner 拒绝、额度扣减与事务回滚。具体执行结果以本次 Maven 报告为准。
 
-文档异步处理已完成：使用有界线程池执行解析和向量化，状态为 `PROCESSING / READY / FAILED`；失败可重试，处理中拒绝删除，前端自动轮询状态。暂未引入 MQ，多实例部署时再评估可靠消息队列。
+文档异步处理已完成：使用有界线程池执行解析和向量化，状态为 `PROCESSING / READY / FAILED / DELETING`；处理失败可重试，处理中拒绝删除，删除失败和重启遗留删除可继续清理，前端自动轮询状态。持久化模式下，自定义知识库 ID 必须在当前用户的知识库集合中存在；`default` 仍是内置知识库。暂未引入 MQ，多实例部署时再评估可靠消息队列。
+
+测试隔离 P0 已修复：默认 Spring Boot 冒烟测试显式关闭鉴权和持久化，即使开发终端设置了对应环境变量也不会连接本机 MySQL；数据库与鉴权行为继续由独立 H2/MySQL 测试覆盖。
+
+费用换算与费用告警已完成：按模型、调用时间和输入/输出 Token 逐次换算，采用缓存未命中输入价作为保守上限；支持 DeepSeek Flash、旧 Flash 别名和 Pro 的 2026-09 价格快照。任务费用接口沿用 owner 校验，前端显示完整性和阈值告警。未知模型或缺失数据不会按零费用冒充完整账单；Tavily 和本地 Embedding 不计入该估算。
 
 仍待完成，不视为整份 spec 已交付：
 
-1. 费用换算与费用告警。长对话增量摘要、任务级记忆使用记录和真实模型 Token 记录已完成；Token 记录包含逐次调用、用户隔离、流式累计去重和历史展示，并已完成一次真实 DeepSeek 验收。
-2. 公网出口隔离、代理下可信客户端识别、完整账户生命周期。
-3. Docker/HTTPS 实机部署、备份恢复演练和公网真实联网验收。Dockerfile、Compose、Nginx、容器健康依赖和部署前检查脚本已经补齐；当前 Windows 未安装 Docker，因此尚未完成镜像构建与容器启动。真实 PDF 文档检索的本地端到端验收已经完成。
-4. M8 演示材料与面试复盘。
+1. **P0：公网安全闭环。** 完成公网出口隔离、代理下可信客户端识别和完整账户生命周期；这些边界未验收前不对公网开放真实 Key。
+2. **P1：部署与灾备实机验收。** 完成 Docker/HTTPS 构建启动、备份恢复演练和公网真实联网验收。Dockerfile、Compose、Nginx、容器健康依赖和部署前检查脚本已经补齐；当前 Windows 未安装 Docker，因此尚未完成镜像构建与容器启动。真实 PDF 文档检索的本地端到端验收已经完成。
+3. **P2：M8 演示材料与面试复盘。** 整理演示脚本、架构图、故障场景和可复述的技术取舍。
 
 部署模板与限制详见 DEPLOYMENT.md；模板存在不代表公网部署成功。

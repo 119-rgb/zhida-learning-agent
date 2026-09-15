@@ -12,3 +12,4 @@ dist/
 deploy/certs/
 _reference/
 tmp/
+.superpowers/

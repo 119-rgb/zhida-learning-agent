@@ -1,37 +1,50 @@
 package com.zhida.agent.observability;
 
-import com.alibaba.cloud.ai.graph.agent.interceptor.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
+
 import com.zhida.agent.conversation.TaskRepository;
+import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.model.chat.response.ChatResponse;
+import dev.langchain4j.model.output.TokenUsage;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.ai.chat.model.ChatResponse;
-import org.springframework.ai.chat.metadata.ChatResponseMetadata;
-import org.springframework.ai.chat.metadata.DefaultUsage;
-import reactor.core.publisher.Flux;
-import reactor.test.StepVerifier;
-import java.util.Map;
-import java.util.List;
-import static org.mockito.Mockito.*;
-import static org.mockito.ArgumentMatchers.*;
 
 class ModelUsageInterceptorTest {
-    @Test void recordsCumulativeStreamingUsageOnce() {
-        TaskRepository repository = mock(TaskRepository.class);
-        ObjectProvider<TaskRepository> provider = mock(ObjectProvider.class);
-        when(provider.getIfAvailable()).thenReturn(repository);
-        var request = ModelRequest.builder().context(Map.of(ToolTracePublisher.TASK_ID_METADATA_KEY,"task")).build();
-        var chunk = new ChatResponse(List.of(), ChatResponseMetadata.builder().model("test-model").usage(new DefaultUsage(100,20)).build());
-        var result = new ModelUsageInterceptor(provider).interceptModel(request, ignored -> ModelResponse.of(Flux.just(chunk,chunk)));
-        StepVerifier.create((Flux<?>)result.getMessage()).expectNextCount(2).verifyComplete();
-        verify(repository,times(1)).recordUsage(eq("task"),anyString(),eq("test-model"),eq(100),eq(20),eq("onComplete"));
+  @Test
+  @SuppressWarnings("unchecked")
+  void savesUsageExactlyOnceForCompletedCall() {
+    var repository = mock(TaskRepository.class);
+    ObjectProvider<TaskRepository> provider = mock(ObjectProvider.class);
+    when(provider.getIfAvailable()).thenReturn(repository);
+    var invocation = new ModelUsageInterceptor(provider).begin("task");
+    var response =
+        ChatResponse.builder()
+            .aiMessage(AiMessage.from("answer"))
+            .modelName("deepseek-chat")
+            .tokenUsage(new TokenUsage(10, 20))
+            .build();
+    invocation.finish(response, "onComplete");
+    invocation.finish(null, "cancel");
+    verify(repository, times(1))
+        .recordUsage(
+            eq("task"), anyString(), eq("deepseek-chat"), eq(10), eq(20), eq("onComplete"));
+    verifyNoMoreInteractions(repository);
+  }
+
+  @Test
+  @SuppressWarnings("unchecked")
+  void missingFailedAndCancelledUsageRemainUnknown() {
+    var repository = mock(TaskRepository.class);
+    ObjectProvider<TaskRepository> provider = mock(ObjectProvider.class);
+    when(provider.getIfAvailable()).thenReturn(repository);
+    var usage = new ModelUsageInterceptor(provider);
+    for (String outcome : new String[] {"onComplete", "onError", "cancel"}) {
+      var call = usage.begin("task");
+      call.finish(null, outcome);
+      call.finish(null, outcome);
     }
-    @Test void missingUsageIsUnknownRatherThanZero() {
-        TaskRepository repository = mock(TaskRepository.class);
-        ObjectProvider<TaskRepository> provider = mock(ObjectProvider.class);
-        when(provider.getIfAvailable()).thenReturn(repository);
-        var request = ModelRequest.builder().context(Map.of(ToolTracePublisher.TASK_ID_METADATA_KEY,"task")).build();
-        var result = new ModelUsageInterceptor(provider).interceptModel(request, ignored -> ModelResponse.of(Flux.just(new ChatResponse(List.of()))));
-        StepVerifier.create((Flux<?>)result.getMessage()).expectNextCount(1).verifyComplete();
-        verify(repository).recordUsage(eq("task"),anyString(),eq("unknown"),isNull(),isNull(),eq("onComplete"));
-    }
+    verify(repository, times(3))
+        .recordUsage(eq("task"), anyString(), eq("unknown"), isNull(), isNull(), anyString());
+  }
 }

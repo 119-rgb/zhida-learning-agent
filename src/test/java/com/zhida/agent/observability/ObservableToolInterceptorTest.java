@@ -1,49 +1,61 @@
 package com.zhida.agent.observability;
 
-import com.alibaba.cloud.ai.graph.RunnableConfig;
-import com.alibaba.cloud.ai.graph.agent.interceptor.ToolCallExecutionContext;
-import com.alibaba.cloud.ai.graph.agent.interceptor.ToolCallRequest;
-import com.alibaba.cloud.ai.graph.agent.interceptor.ToolCallResponse;
+import static org.assertj.core.api.Assertions.*;
+
+import com.zhida.agent.auth.KnowledgeScope;
+import dev.langchain4j.agent.tool.ToolExecutionRequest;
+import java.util.ArrayList;
 import org.junit.jupiter.api.Test;
-import reactor.core.publisher.Flux;
-import reactor.test.StepVerifier;
-
-import java.util.Optional;
-
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 class ObservableToolInterceptorTest {
-
-    @Test
-    void shouldPublishStartedAndCompletedEvents() {
-        ToolTracePublisher publisher = new ToolTracePublisher();
-        ObservableToolInterceptor interceptor = new ObservableToolInterceptor(publisher);
-        Flux<ToolTrace> traces = publisher.open("task-1");
-
-        RunnableConfig config = mock(RunnableConfig.class);
-        when(config.metadata(ToolTracePublisher.TASK_ID_METADATA_KEY)).thenReturn(Optional.of("task-1"));
-        ToolCallExecutionContext executionContext = mock(ToolCallExecutionContext.class);
-        when(executionContext.config()).thenReturn(config);
-
-        ToolCallRequest request = mock(ToolCallRequest.class);
-        when(request.getExecutionContext()).thenReturn(Optional.of(executionContext));
-        when(request.getToolCallId()).thenReturn("call-1");
-        when(request.getToolName()).thenReturn("current_date");
-        when(request.getArguments()).thenReturn("{}");
-
-        interceptor.interceptToolCall(
+  @Test
+  void publishesOrderedTracesAndRestoresKnowledgeScope() {
+    var publisher = new ToolTracePublisher();
+    var events = new ArrayList<ToolTrace>();
+    publisher.open("t", 2, events::add);
+    var interceptor = new ObservableToolInterceptor(publisher);
+    var request =
+        ToolExecutionRequest.builder()
+            .id("call")
+            .name("knowledge_search")
+            .arguments("{\"query\":\"test\"}")
+            .build();
+    assertThat(
+            interceptor.execute(
+                "t",
+                "alice-base",
                 request,
-                ignored -> new ToolCallResponse("2026-09-09", "current_date", "call-1")
-        );
-        publisher.complete("task-1");
+                () -> {
+                  assertThat(KnowledgeScope.current()).isEqualTo("alice-base");
+                  return "result";
+                }))
+        .isEqualTo("result");
+    assertThat(events)
+        .extracting(ToolTrace::type)
+        .containsExactly("tool.started", "tool.completed");
+    assertThat(events.get(1).error()).isFalse();
+    assertThatThrownBy(KnowledgeScope::current).isInstanceOf(IllegalStateException.class);
+  }
 
-        StepVerifier.create(traces)
-                .expectNextMatches(trace -> trace.type().equals("tool.started")
-                        && trace.toolName().equals("current_date"))
-                .expectNextMatches(trace -> trace.type().equals("tool.completed")
-                        && trace.resultPreview().equals("2026-09-09")
-                        && !trace.error())
-                .verifyComplete();
-    }
+  @Test
+  void failuresPublishErrorAndClearScope() {
+    var publisher = new ToolTracePublisher();
+    var events = new ArrayList<ToolTrace>();
+    publisher.open("t", 1, events::add);
+    var request =
+        ToolExecutionRequest.builder().id("call").name("web_search").arguments("{}").build();
+    assertThatThrownBy(
+            () ->
+                new ObservableToolInterceptor(publisher)
+                    .execute(
+                        "t",
+                        "scope",
+                        request,
+                        () -> {
+                          throw new IllegalStateException("failure");
+                        }))
+        .isInstanceOf(IllegalStateException.class);
+    assertThat(events.get(1).error()).isTrue();
+    assertThatThrownBy(KnowledgeScope::current).isInstanceOf(IllegalStateException.class);
+  }
 }

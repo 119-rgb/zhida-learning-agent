@@ -1,126 +1,346 @@
 package com.zhida.agent.application;
 
-import com.alibaba.cloud.ai.graph.agent.ReactAgent;
+import static org.assertj.core.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
 import com.zhida.agent.agent.planner.RuleBasedQuestionPlanner;
 import com.zhida.agent.api.dto.ResearchRequest;
 import com.zhida.agent.common.config.ZhidaProperties;
-import com.zhida.agent.observability.ToolTracePublisher;
+import com.zhida.agent.knowledge.KnowledgeBaseAccessService;
+import com.zhida.agent.observability.*;
+import com.zhida.agent.tool.ResearchTools;
+import dev.langchain4j.agent.tool.ToolExecutionRequest;
+import dev.langchain4j.data.message.*;
+import dev.langchain4j.model.chat.StreamingChatModel;
+import dev.langchain4j.model.chat.request.ChatRequest;
+import dev.langchain4j.model.chat.response.*;
+import java.util.*;
+import java.util.concurrent.*;
 import org.junit.jupiter.api.Test;
-import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.beans.factory.ObjectProvider;
-import reactor.test.StepVerifier;
-
-import java.util.List;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 class ResearchOrchestratorTest {
-    @Test void totalTimeoutAppliesEvenWhenModelKeepsProducingTokens() throws Exception {
-        @SuppressWarnings("unchecked") ObjectProvider<ReactAgent> provider = mock(ObjectProvider.class);
-        var agent = mock(ReactAgent.class);
-        when(provider.getIfAvailable()).thenReturn(agent);
-        when(agent.streamMessages(anyString(), any())).thenAnswer(invocation -> reactor.core.publisher.Flux.interval(java.time.Duration.ofSeconds(1))
-                .map(tick -> new AssistantMessage("片段")));
-        var properties = new ZhidaProperties();
-        properties.getAi().setEnabled(true);
-        properties.getExecution().setTimeoutSeconds(3);
-        var orchestrator = new ResearchOrchestrator(new RuleBasedQuestionPlanner(), provider, properties, new ToolTracePublisher());
-        StepVerifier.withVirtualTime(() -> orchestrator.stream(new ResearchRequest("timeout", "问题")))
-                .thenAwait(java.time.Duration.ofSeconds(4))
-                .thenConsumeWhile(event -> !event.type().equals("task.failed"))
-                .expectNextMatches(event -> event.data() instanceof java.util.Map<?, ?> data && "TASK_TIMEOUT".equals(data.get("errorCode")))
-                .verifyComplete();
+  @Test
+  void completesWhenProviderOnlyReturnsFinalMessage() {
+    StreamingChatModel model =
+        new StreamingChatModel() {
+          @Override
+          public void doChat(ChatRequest request, StreamingChatResponseHandler handler) {
+            handler.onCompleteResponse(
+                ChatResponse.builder().aiMessage(AiMessage.from("完整回答")).build());
+          }
+        };
+    var core = orchestrator(model, 3);
+    var events = new ArrayList<AgentEvent>();
+    try {
+      core.prepare(new ResearchRequest("final-only", "问题"), "local-user").execute(events::add);
+      assertThat(
+              events.stream()
+                  .filter(e -> e.type().equals("answer.delta"))
+                  .map(e -> (String) ((Map<?, ?>) e.data()).get("content")))
+          .containsExactly("完整回答");
+      assertThat(events)
+          .extracting(AgentEvent::type)
+          .contains("task.completed")
+          .doesNotContain("task.failed");
+    } finally {
+      core.close();
     }
+  }
 
-    @Test
-    void realAgentAcceptsRestoredMessagesWithoutMemorySaver() {
-        var model = mock(org.springframework.ai.chat.model.ChatModel.class);
-        var response = new org.springframework.ai.chat.model.ChatResponse(List.of(
-                new org.springframework.ai.chat.model.Generation(new AssistantMessage("你叫小周"))));
-        when(model.stream(any(org.springframework.ai.chat.prompt.Prompt.class)))
-                .thenReturn(reactor.core.publisher.Flux.just(response));
-        when(model.call(any(org.springframework.ai.chat.prompt.Prompt.class))).thenReturn(response);
-        var agent = ReactAgent.builder().name("restore_test").model(model).instruction("回答用户问题").build();
-        @SuppressWarnings("unchecked") ObjectProvider<ReactAgent> provider = mock(ObjectProvider.class);
-        when(provider.getIfAvailable()).thenReturn(agent);
-        var properties = new ZhidaProperties();
-        properties.getAi().setEnabled(true);
-        var orchestrator = new ResearchOrchestrator(new RuleBasedQuestionPlanner(), provider, properties, new ToolTracePublisher());
-        List<org.springframework.ai.chat.messages.Message> history = List.of(
-                new org.springframework.ai.chat.messages.UserMessage("我叫小周"),
-                new AssistantMessage("你好"), new org.springframework.ai.chat.messages.UserMessage("我叫什么？"));
-        for (int i = 0; i < 2; i++) {
-            var events = orchestrator.streamWithContext(new ResearchRequest("restored", "我叫什么？"), history)
-                    .collectList().block(java.time.Duration.ofSeconds(10));
-            org.assertj.core.api.Assertions.assertThat(events).extracting(AgentEvent::type)
-                    .contains("task.completed").doesNotContain("task.failed");
-        }
-        var prompt = org.mockito.ArgumentCaptor.forClass(org.springframework.ai.chat.prompt.Prompt.class);
-        org.mockito.Mockito.verify(model, org.mockito.Mockito.times(2)).stream(prompt.capture());
-        for (var sent : prompt.getAllValues()) {
-            org.assertj.core.api.Assertions.assertThat(sent.getInstructions())
-                    .filteredOn(m -> m.getMessageType() != org.springframework.ai.chat.messages.MessageType.SYSTEM)
-                    .extracting(org.springframework.ai.chat.messages.Message::getText)
-                    .containsExactly("我叫小周", "你好", "我叫什么？", "回答用户问题");
-        }
+  @Test
+  void queueDelayConsumesTaskBudgetBeforeModelCall() throws Exception {
+    var calls = new java.util.concurrent.atomic.AtomicInteger();
+    StreamingChatModel model =
+        new StreamingChatModel() {
+          @Override
+          public void doChat(ChatRequest request, StreamingChatResponseHandler handler) {
+            calls.incrementAndGet();
+          }
+        };
+    var core = orchestrator(model, 1);
+    try {
+      var session = core.prepare(new ResearchRequest("queued", "问题"), "local-user");
+      Thread.sleep(1100);
+      var events = new ArrayList<AgentEvent>();
+      session.execute(events::add);
+      assertThat(calls).hasValue(0);
+      assertThat(events)
+          .filteredOn(e -> e.type().equals("task.failed"))
+          .singleElement()
+          .satisfies(
+              event ->
+                  assertThat(((Map<?, ?>) event.data()).get("errorCode"))
+                      .isEqualTo("TASK_TIMEOUT"));
+      assertThat(events).extracting(AgentEvent::type).doesNotContain("task.completed");
+    } finally {
+      core.close();
     }
+  }
 
-    @Test
-    void shouldCompleteFullEventFlowInDemoMode() {
-        @SuppressWarnings("unchecked")
-        ObjectProvider<ReactAgent> provider = mock(ObjectProvider.class);
-        when(provider.getIfAvailable()).thenReturn(null);
-
-        ResearchOrchestrator orchestrator = new ResearchOrchestrator(
-                new RuleBasedQuestionPlanner(),
-                provider,
-                new ZhidaProperties(),
-                new ToolTracePublisher()
-        );
-
-        StepVerifier.create(orchestrator.stream(new ResearchRequest("demo", "解释一下 RocketMQ")))
-                .expectNextMatches(event -> event.type().equals("task.started"))
-                .expectNextMatches(event -> event.type().equals("plan.created"))
-                .expectNextMatches(event -> event.type().equals("step.started"))
-                .expectNextMatches(event -> event.type().equals("answer.started"))
-                .expectNextMatches(event -> event.type().equals("answer.delta"))
-                .expectNextMatches(event -> event.type().equals("step.completed"))
-                .expectNextMatches(event -> event.type().equals("task.completed"))
-                .verifyComplete();
+  @Test
+  @SuppressWarnings("unchecked")
+  void oldCancelledSessionCannotUnlockNewConversation() throws Exception {
+    var accountingEntered = new CountDownLatch(1);
+    var accountingRelease = new CountDownLatch(1);
+    var providerStarted = new CountDownLatch(1);
+    var repository = mock(com.zhida.agent.conversation.TaskRepository.class);
+    doAnswer(
+            invocation -> {
+              accountingEntered.countDown();
+              accountingRelease.await(3, TimeUnit.SECONDS);
+              return null;
+            })
+        .when(repository)
+        .recordUsage(
+            anyString(),
+            anyString(),
+            anyString(),
+            nullable(Integer.class),
+            nullable(Integer.class),
+            anyString());
+    ObjectProvider<com.zhida.agent.conversation.TaskRepository> repositories =
+        mock(ObjectProvider.class);
+    when(repositories.getIfAvailable()).thenReturn(repository);
+    StreamingChatModel model =
+        new StreamingChatModel() {
+          @Override
+          public void doChat(ChatRequest request, StreamingChatResponseHandler handler) {
+            providerStarted.countDown();
+          }
+        };
+    ObjectProvider<StreamingChatModel> models = mock(ObjectProvider.class);
+    when(models.getIfAvailable()).thenReturn(model);
+    var properties = new ZhidaProperties();
+    properties.getAi().setEnabled(true);
+    var traces = new ToolTracePublisher();
+    var core =
+        new ResearchOrchestrator(
+            new RuleBasedQuestionPlanner(),
+            models,
+            properties,
+            traces,
+            new KnowledgeBaseAccessService(Optional.empty()),
+            null,
+            new ObservableToolInterceptor(traces),
+            new ModelUsageInterceptor(repositories));
+    var worker = Executors.newSingleThreadExecutor();
+    ResearchSession next = null;
+    try {
+      var old = core.prepare(new ResearchRequest("race", "A"), "local-user");
+      var exiting = worker.submit(() -> old.execute(event -> {}));
+      assertThat(providerStarted.await(2, TimeUnit.SECONDS)).isTrue();
+      old.cancel();
+      assertThat(accountingEntered.await(2, TimeUnit.SECONDS)).isTrue();
+      next = core.prepare(new ResearchRequest("race", "B"), "local-user");
+      accountingRelease.countDown();
+      exiting.get(2, TimeUnit.SECONDS);
+      assertThatThrownBy(() -> core.prepare(new ResearchRequest("race", "C"), "local-user"))
+          .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+          .satisfies(
+              error ->
+                  assertThat(
+                          ((org.springframework.web.server.ResponseStatusException) error)
+                              .getStatusCode()
+                              .value())
+                      .isEqualTo(409));
+    } finally {
+      accountingRelease.countDown();
+      if (next != null) next.cancel();
+      worker.shutdownNow();
+      core.close();
     }
+  }
 
-    @Test
-    void shouldKeepEventIdsOrderedInRealAgentMode() throws Exception {
-        @SuppressWarnings("unchecked")
-        ObjectProvider<ReactAgent> provider = mock(ObjectProvider.class);
-        ReactAgent agent = mock(ReactAgent.class);
-        when(provider.getIfAvailable()).thenReturn(agent);
-        when(agent.streamMessages(anyString(), any()))
-                .thenReturn(reactor.core.publisher.Flux.just(new AssistantMessage("回答")));
+  @SuppressWarnings("unchecked")
+  private ResearchOrchestrator orchestrator(StreamingChatModel model, int timeout) {
+    return orchestrator(model, timeout, null, 30);
+  }
 
-        ZhidaProperties properties = new ZhidaProperties();
-        properties.getAi().setEnabled(true);
-        ResearchOrchestrator orchestrator = new ResearchOrchestrator(
-                new RuleBasedQuestionPlanner(),
-                provider,
-                properties,
-                new ToolTracePublisher()
-        );
+  @SuppressWarnings("unchecked")
+  private ResearchOrchestrator orchestrator(
+      StreamingChatModel model, int timeout, ResearchTools tools, int maxTools) {
+    ObjectProvider<StreamingChatModel> provider = mock(ObjectProvider.class);
+    when(provider.getIfAvailable()).thenReturn(model);
+    var properties = new ZhidaProperties();
+    properties.getAi().setEnabled(model != null);
+    properties.getExecution().setTimeoutSeconds(timeout);
+    properties.getExecution().setMaxToolCalls(maxTools);
+    var traces = new ToolTracePublisher();
+    return new ResearchOrchestrator(
+        new RuleBasedQuestionPlanner(),
+        provider,
+        properties,
+        traces,
+        new KnowledgeBaseAccessService(Optional.empty()),
+        tools,
+        new ObservableToolInterceptor(traces),
+        new ModelUsageInterceptor(mock(ObjectProvider.class)));
+  }
 
-        List<AgentEvent> events = orchestrator
-                .stream(new ResearchRequest("conversation-1", "解释 Agent"))
-                .collectList()
-                .block();
-
-        assertEquals("task.completed", events.get(events.size() - 1).type());
-        for (int index = 0; index < events.size(); index++) {
-            assertEquals(index + 1L, events.get(index).eventId());
-        }
-        assertTrue(events.stream().anyMatch(event -> event.type().equals("answer.delta")));
+  @Test
+  void demoCompletesWithOrderedEvents() {
+    var events = new ArrayList<AgentEvent>();
+    var core = orchestrator(null, 3);
+    try {
+      core.prepare(new ResearchRequest("demo", "解释 Agent"), "local-user").execute(events::add);
+      assertThat(events)
+          .extracting(AgentEvent::type)
+          .containsExactly(
+              "task.started",
+              "plan.created",
+              "step.started",
+              "answer.started",
+              "answer.delta",
+              "step.completed",
+              "task.completed");
+      for (int i = 0; i < events.size(); i++) assertThat(events.get(i).eventId()).isEqualTo(i + 1);
+    } finally {
+      core.close();
     }
+  }
+
+  @Test
+  void cancellationBeforeExecutionSuppressesEventsAndReleasesConversation() {
+    var events = new ArrayList<AgentEvent>();
+    var core = orchestrator(null, 3);
+    try {
+      var session = core.prepare(new ResearchRequest("demo", "问题"), "local-user");
+      assertThat(session.cancel()).isTrue();
+      session.execute(events::add);
+      assertThat(events).isEmpty();
+      assertThat(session.cancel()).isFalse();
+      core.prepare(new ResearchRequest("demo", "继续"), "local-user").cancel();
+    } finally {
+      core.close();
+    }
+  }
+
+  @Test
+  void streamsProviderDeltasAndPreservesLowPrivilegeHistory() {
+    var requests = new ArrayList<ChatRequest>();
+    StreamingChatModel model =
+        new StreamingChatModel() {
+          @Override
+          public void doChat(ChatRequest request, StreamingChatResponseHandler handler) {
+            requests.add(request);
+            handler.onPartialResponse("你叫");
+            handler.onPartialResponse(" ");
+            handler.onPartialResponse("小周");
+            handler.onCompleteResponse(
+                ChatResponse.builder().aiMessage(AiMessage.from("你叫小周")).build());
+          }
+        };
+    var events = new ArrayList<AgentEvent>();
+    var core = orchestrator(model, 3);
+    try {
+      core.prepareWithContext(
+              new ResearchRequest("c", "我叫什么？"),
+              List.of(UserMessage.from("我叫小周"), AiMessage.from("你好"), UserMessage.from("我叫什么？")),
+              "t",
+              "local-user")
+          .execute(events::add);
+      assertThat(events)
+          .extracting(AgentEvent::type)
+          .contains("task.completed")
+          .doesNotContain("task.failed");
+      assertThat(
+              events.stream()
+                  .filter(e -> e.type().equals("answer.delta"))
+                  .map(e -> (String) ((Map<?, ?>) e.data()).get("content")))
+          .containsExactly("你叫", " ", "小周");
+      assertThat(requests.get(0).messages()).hasSize(4);
+      assertThat(requests.get(0).messages().get(1)).isEqualTo(UserMessage.from("我叫小周"));
+    } finally {
+      core.close();
+    }
+  }
+
+  @Test
+  void timeoutStopsContinuouslyStreamingProvider() {
+    var producer = Executors.newSingleThreadScheduledExecutor();
+    ResearchOrchestrator core = null;
+    try {
+      StreamingChatModel model =
+          new StreamingChatModel() {
+            @Override
+            public void doChat(ChatRequest request, StreamingChatResponseHandler handler) {
+              producer.scheduleAtFixedRate(
+                  () -> handler.onPartialResponse("字"), 0, 20, TimeUnit.MILLISECONDS);
+            }
+          };
+      var events = new ArrayList<AgentEvent>();
+      long start = System.nanoTime();
+      core = orchestrator(model, 1);
+      core.prepare(new ResearchRequest("c", "问题"), "local-user").execute(events::add);
+      assertThat(TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - start)).isLessThan(3);
+      assertThat(events).extracting(AgentEvent::type).doesNotContain("task.completed");
+      assertThat(((Map<?, ?>) events.get(events.size() - 1).data()).get("errorCode"))
+          .isEqualTo("TASK_TIMEOUT");
+    } finally {
+      producer.shutdownNow();
+      if (core != null) core.close();
+    }
+  }
+
+  @Test
+  void toolLoopStreamsAfterToolAndEnforcesBudget() {
+    var tools = new ResearchTools(null, null, null);
+    var calls = new java.util.concurrent.atomic.AtomicInteger();
+    StreamingChatModel model =
+        new StreamingChatModel() {
+          @Override
+          public void doChat(ChatRequest request, StreamingChatResponseHandler handler) {
+            calls.incrementAndGet();
+            handler.onCompleteResponse(
+                ChatResponse.builder()
+                    .aiMessage(
+                        AiMessage.from(
+                            ToolExecutionRequest.builder()
+                                .id("call" + calls.get())
+                                .name("current_date")
+                                .arguments("{}")
+                                .build()))
+                    .build());
+          }
+        };
+    var events = new ArrayList<AgentEvent>();
+    var core = orchestrator(model, 3, tools, 1);
+    try {
+      core.prepare(new ResearchRequest("c", "今天？"), "local-user").execute(events::add);
+      assertThat(events)
+          .extracting(AgentEvent::type)
+          .containsSubsequence("tool.started", "tool.completed", "task.failed")
+          .doesNotContain("task.completed");
+      assertThat(((Map<?, ?>) events.get(events.size() - 1).data()).get("errorCode"))
+          .isEqualTo("TOOL_BUDGET_EXCEEDED");
+      assertThat(calls).hasValue(2);
+    } finally {
+      core.close();
+    }
+  }
+
+  @Test
+  void noDatabaseRetainsBoundedCompletedExchanges() {
+    var requests = new ArrayList<ChatRequest>();
+    StreamingChatModel model =
+        new StreamingChatModel() {
+          @Override
+          public void doChat(ChatRequest request, StreamingChatResponseHandler handler) {
+            requests.add(request);
+            handler.onPartialResponse("回答");
+            handler.onCompleteResponse(
+                ChatResponse.builder().aiMessage(AiMessage.from("回答")).build());
+          }
+        };
+    var core = orchestrator(model, 3);
+    try {
+      for (int i = 0; i < 12; i++)
+        core.prepare(new ResearchRequest("c", "问题" + i), "local-user").execute(e -> {});
+      assertThat(requests.get(11).messages()).hasSize(22);
+      assertThat(requests.get(11).messages().get(1)).isEqualTo(UserMessage.from("问题1"));
+    } finally {
+      core.close();
+    }
+  }
 }

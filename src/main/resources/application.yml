@@ -6,22 +6,15 @@ spring:
     exclude: org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
   application:
     name: zhida-learning-agent
-  codec:
-    max-in-memory-size: 24MB
-  webflux:
+  servlet:
     multipart:
-      max-in-memory-size: 1MB
-      max-disk-usage-per-part: 20MB
-  ai:
-    deepseek:
-      # 非空占位值只用于让演示模式完成 Spring 容器装配；演示模式不会发起模型请求。
-      # 真实 Agent 模式请设置 DEEPSEEK_API_KEY 环境变量。
-      api-key: ${DEEPSEEK_API_KEY:demo-disabled}
-      chat:
-        options:
-          model: ${DEEPSEEK_CHAT_MODEL:deepseek-chat}
+      file-size-threshold: 1MB
+      max-file-size: 20MB
+      max-request-size: 24MB
 
 zhida:
+  cost:
+    warning-usd: ${ZHIDA_COST_WARNING_USD:0.01}
   auth:
     enabled: ${ZHIDA_AUTH_ENABLED:false}
     secret: ${ZHIDA_JWT_SECRET:}
@@ -29,7 +22,7 @@ zhida:
     daily-limit: ${ZHIDA_DAILY_LIMIT:100}
     guest-daily-limit: ${ZHIDA_GUEST_DAILY_LIMIT:5}
     timeout-seconds: ${ZHIDA_TASK_TIMEOUT_SECONDS:90}
-    max-tool-calls: ${ZHIDA_MAX_TOOL_CALLS:8}
+    max-tool-calls: ${ZHIDA_MAX_TOOL_CALLS:30}
   persistence:
     enabled: ${ZHIDA_PERSISTENCE_ENABLED:false}
     url: ${DB_URL:jdbc:mysql://127.0.0.1:3306/zhida_agent?characterEncoding=UTF-8&serverTimezone=UTC}
@@ -37,6 +30,9 @@ zhida:
     password: ${DB_PASSWORD:}
   ai:
     enabled: ${ZHIDA_AI_ENABLED:false}
+    api-key: ${DEEPSEEK_API_KEY:}
+    base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com/v1}
+    model: ${DEEPSEEK_CHAT_MODEL:deepseek-flash}
   conversation-summary:
     enabled: ${ZHIDA_SUMMARY_ENABLED:true}
   search:
@@ -46,10 +42,10 @@ zhida:
     max-content-length: 12000
   rag:
     upload-dir: ${ZHIDA_UPLOAD_DIR:./data/uploads}
-    vector-store-file: ${ZHIDA_VECTOR_STORE_FILE:./data/vector/vector-store.json}
-    model-cache-dir: ${ZHIDA_MODEL_CACHE_DIR:./data/models}
-    model-uri: ${ZHIDA_EMBEDDING_MODEL_URI:https://huggingface.co/Xenova/bge-small-zh-v1.5/resolve/main/onnx/model_quantized.onnx}
-    tokenizer-uri: ${ZHIDA_TOKENIZER_URI:https://huggingface.co/Xenova/bge-small-zh-v1.5/resolve/main/tokenizer.json}
+    vector-store-file: ${ZHIDA_VECTOR_STORE_FILE:./data/vector/langchain4j-vector-store.json}
+    embedding-base-url: ${EMBEDDING_BASE_URL:}
+    embedding-api-key: ${EMBEDDING_API_KEY:}
+    embedding-model: ${EMBEDDING_MODEL:}
     max-file-size: 20971520
     max-documents-per-knowledge-base: 20
     chunk-size: 800

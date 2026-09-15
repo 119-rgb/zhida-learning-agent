@@ -70,7 +70,8 @@ class TaskRepositoryTest {
         tasks.finish("alice", "a", "task1", "COMPLETED", null, "重复回答");
         assertThat(tasks.list("alice", "a").get(0).status()).isEqualTo("COMPLETED");
         tasks.recordUsage("task1", UUID.randomUUID().toString(), "test-model", 100, 20, "onComplete");
-        assertThat(tasks.usage("alice", "task1")).hasSize(1);
+        assertThat(tasks.usage("alice", "task1")).singleElement()
+                .satisfies(usage -> assertThat(usage.recordedAt()).isNotNull());
         assertThatThrownBy(() -> tasks.usage("bob", "task1")).isInstanceOf(ResponseStatusException.class);
         assertThat(conversations.messages("alice", "a")).hasSize(2);
         assertThat(tasks.events("alice", "a", "task1")).extracting(TaskRepository.Event::type)

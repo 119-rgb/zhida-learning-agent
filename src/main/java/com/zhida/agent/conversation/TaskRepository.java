@@ -34,7 +34,7 @@ public class TaskRepository {
 
     public record Task(String id, String question, String status, String errorCode, Instant startedAt, Instant finishedAt) {}
     public record Event(long eventId, String type, JsonNode data, Instant createdAt) {}
-    public record Usage(String model, Integer promptTokens, Integer completionTokens, String outcome) {}
+    public record Usage(String model, Integer promptTokens, Integer completionTokens, String outcome, Instant recordedAt) {}
     public record MemoryUsage(String memoryId, String content, boolean deleted) {}
 
     public List<MemoryUsage> memoryUsage(String owner, String taskId) {
@@ -63,8 +63,14 @@ public class TaskRepository {
 
     public List<Usage> usage(String owner, String taskId) {
         snapshot(owner, taskId);
-        return jdbc.query("SELECT model_name,prompt_tokens,completion_tokens,outcome FROM model_usage WHERE task_id=? ORDER BY created_at,id",
-                (rs,row) -> new Usage(rs.getString(1), rs.getObject(2,Integer.class), rs.getObject(3,Integer.class),rs.getString(4)),taskId);
+        return jdbc.query("SELECT model_name,prompt_tokens,completion_tokens,outcome,created_at FROM model_usage WHERE task_id=? ORDER BY created_at,id",
+                (rs,row) -> new Usage(
+                        rs.getString(1),
+                        rs.getObject(2,Integer.class),
+                        rs.getObject(3,Integer.class),
+                        rs.getString(4),
+                        rs.getTimestamp(5).toInstant()
+                ),taskId);
     }
 
     public void begin(String owner, String conversationId, String taskId, String question) {

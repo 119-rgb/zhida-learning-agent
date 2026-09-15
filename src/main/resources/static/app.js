@@ -83,7 +83,8 @@ let documentRefreshTimer;
 const DOCUMENT_STATUS_LABELS = Object.freeze({
     PROCESSING: '处理中',
     READY: '已就绪',
-    FAILED: '处理失败'
+    FAILED: '处理失败',
+    DELETING: '删除中'
 });
 const stopButton = document.querySelector('#stopButton');
 stopButton.addEventListener('click', async () => {
@@ -392,9 +393,10 @@ async function loadTaskHistory(id) {
                 loaded = true;
                 content.textContent = '正在读取…';
                 try {
-                    const [result, usageResponse, memoryResponse] = await Promise.all([
+                    const [result, usageResponse, costResponse, memoryResponse] = await Promise.all([
                         fetch(`/api/v1/conversations/${encodeURIComponent(id)}/tasks/${encodeURIComponent(task.id)}/events`),
                         fetch(`/api/v1/tasks/${encodeURIComponent(task.id)}/usage`),
+                        fetch(`/api/v1/tasks/${encodeURIComponent(task.id)}/cost`),
                         fetch(`/api/v1/tasks/${encodeURIComponent(task.id)}/memories`)
                     ]);
                     if (!result.ok) throw new Error('读取失败，收起后可重试');
@@ -409,6 +411,24 @@ async function loadTaskHistory(id) {
                             ? `模型调用 ${calls.length} 次，已记录 ${tokens} Tokens${known.length < calls.length ? '（部分调用用量未知）' : ''}。`
                             : '本次没有模型用量记录（演示模式或较早的任务）。';
                         content.append(usage);
+                    }
+                    if (costResponse.ok) {
+                        const cost = await costResponse.json();
+                        if (cost.totalCalls > 0) {
+                            const costSummary = document.createElement('p');
+                            costSummary.className = cost.warning ? 'task-meta cost-warning' : 'task-meta';
+                            if (cost.pricedCalls === 0) {
+                                costSummary.textContent = '费用暂无法估算：当前记录缺少可识别的模型、Token 或调用时间。';
+                            } else {
+                                const amount = Number(cost.estimatedMaxCostUsd).toFixed(6);
+                                const incomplete = cost.complete
+                                    ? ''
+                                    : `；仅覆盖 ${cost.pricedCalls}/${cost.totalCalls} 次调用`;
+                                const warning = cost.warning ? '；已达到费用告警阈值' : '';
+                                costSummary.textContent = `DeepSeek 费用上限估算：$${amount} USD（按缓存未命中价${incomplete}${warning}）。`;
+                            }
+                            content.append(costSummary);
+                        }
                     }
                     if (memoryResponse.ok) {
                         const memories = await memoryResponse.json();
@@ -561,12 +581,14 @@ form.addEventListener('submit', async event => {
         if (answerElement.classList.contains('typing')) throw new Error('连接结束，但没有收到任务完成确认');
     } catch (error) {
         const friendlyMessage = stoppedByUser ? '已停止回答。当前未完成的回答不会保存为完整答案。' : error.name === 'AbortError'
-            ? '这次任务超过了两分钟。你可以把问题说得更具体一些，再试一次。'
-            : `暂时没有完成：${error.message}`;
+            ? '这次回答等待时间较长，请重新提问。'
+            : error.message.startsWith('这个请求') || error.message.startsWith('已达到请求频率')
+                ? error.message
+                : '暂时没有生成完整回答，请重新提问。';
         answerBuffer = friendlyMessage;
         answerElement.textContent = friendlyMessage;
-        addThinkingItem('没有顺利完成', friendlyMessage, 'error');
-        finishThinking('分析没有完成', false);
+        thinkingDetails.hidden = true;
+        answerElement.classList.remove('typing');
         statusText.textContent = '可以重新试一次';
         if (!stoppedByUser) {
             try {
@@ -612,6 +634,7 @@ async function loadDocuments(updateMessage = true) {
         if (!response.ok) return;
         const documents = await response.json();
         const processingCount = documents.filter(item => item.status === 'PROCESSING').length;
+        const deletingCount = documents.filter(item => item.status === 'DELETING').length;
         const failedCount = documents.filter(item => item.status === 'FAILED').length;
         const documentList = document.querySelector('#documentList');
         documentList.replaceChildren();
@@ -658,7 +681,7 @@ async function loadDocuments(updateMessage = true) {
             const remove = document.createElement('button');
             remove.type = 'button';
             remove.className = 'row-action row-action-danger';
-            remove.textContent = '移除';
+            remove.textContent = status === 'DELETING' ? '继续删除' : '移除';
             remove.setAttribute('aria-label', `删除资料：${item.filename}`);
             remove.disabled = status === 'PROCESSING';
             if (remove.disabled) {
@@ -680,8 +703,10 @@ async function loadDocuments(updateMessage = true) {
             documentList.append(row);
         }
         documentCount.textContent = String(documents.length);
-        if (processingCount > 0) {
-            knowledgeStatus.textContent = `${processingCount} 份资料正在后台处理，完成后即可检索。`;
+        if (processingCount > 0 || deletingCount > 0) {
+            knowledgeStatus.textContent = processingCount > 0
+                ? `${processingCount} 份资料正在后台处理，完成后即可检索。`
+                : `${deletingCount} 份资料正在继续删除。`;
             documentRefreshTimer = window.setTimeout(() => loadDocuments(), 1500);
         } else if (failedCount > 0) {
             knowledgeStatus.textContent = `${failedCount} 份资料处理失败，可以点击重试。`;
@@ -728,25 +753,17 @@ function handleAgentEvent(event) {
         answerBuffer += data.content || '';
         answerElement.textContent = answerBuffer;
         scrollMessages();
-    } else if (type === 'tool.started') {
-        addToolItem(data, 'started');
-        statusText.textContent = friendlyToolProgress(data.toolName);
-    } else if (type === 'tool.completed') {
-        addToolItem(data, 'completed');
-    } else if (type === 'tool.failed') {
-        addToolItem(data, 'failed');
     } else if (type === 'task.completed') {
         answerElement.replaceChildren(renderMarkdown(answerBuffer));
         finishThinking('已完成分析', true);
         statusText.textContent = '回答完成';
         scrollMessages();
     } else if (type === 'task.failed') {
-        const message = data.message || '遇到了未知问题';
-        answerBuffer += `\n\n这次没有顺利完成：${message}`;
-        answerElement.textContent = answerBuffer;
-        addThinkingItem('执行遇到问题', message, 'error');
-        finishThinking('分析没有完成', false);
-        statusText.textContent = '可以重新试一次';
+        if (!answerBuffer.trim()) answerBuffer = '暂时没有生成完整回答，请重新提问。';
+        answerElement.replaceChildren(renderMarkdown(answerBuffer));
+        thinkingDetails.hidden = true;
+        answerElement.classList.remove('typing');
+        statusText.textContent = '回答未完成，请重试';
     }
 }
 
@@ -793,33 +810,6 @@ function renderFriendlyPlan(steps) {
         friendlyStepDescription(step.stepId, step.goal),
         index === 0 ? 'done' : 'pending'
     ));
-}
-
-function addToolItem(data, state) {
-    const titles = {
-        current_date: state === 'started' ? '确认现在的日期' : '日期已经确认',
-        web_search: state === 'started' ? '去网上查找相关资料' : '已经找到一批相关资料',
-        read_web_page: state === 'started' ? '阅读一份可信网页' : '已经读完这份网页',
-        knowledge_search: state === 'started' ? '在你上传的资料里查找' : '已经找到相关文档片段'
-    };
-    const failed = state === 'failed';
-    const description = failed
-        ? '这一步没有成功，我会根据已有信息继续，或在答案中说明限制。'
-        : state === 'started' ? '稍等一下，正在获取可以核对的信息。' : `这一步用了 ${data.durationMs ?? 0} 毫秒。`;
-    const title = titles[data.toolName] || toolLabel(data.toolName);
-    const itemState = failed ? 'error' : state === 'started' ? 'active' : 'done';
-    const existing = [...thinkingList.querySelectorAll('.thinking-item')]
-        .find(item => item.dataset.toolCallId === data.toolCallId);
-    if (existing) {
-        existing.className = `thinking-item ${itemState}`;
-        existing.querySelector('.thinking-marker').textContent = itemState === 'done' ? '✓' : itemState === 'error' ? '!' : '';
-        existing.querySelector('strong').textContent = title;
-        existing.querySelector('p').textContent = description;
-        existing.querySelector('pre').textContent = technicalText(data);
-        return;
-    }
-    const item = addThinkingItem(title, description, itemState, data);
-    item.dataset.toolCallId = data.toolCallId || '';
 }
 
 function addThinkingItem(title, description, state = 'pending', technicalData) {
@@ -887,10 +877,6 @@ function friendlyStepDescription(stepId, fallback) {
         compare: '看清各自的优点、缺点和适用情况。', compose: '把结论、理由和下一步建议说清楚。'
     };
     return labels[stepId] || fallback || '完成必要的信息整理。';
-}
-
-function friendlyToolProgress(toolName) {
-    return ({ current_date: '正在确认日期…', web_search: '正在搜索最新资料…', read_web_page: '正在阅读网页…', knowledge_search: '正在查找你的文档…' })[toolName] || '正在使用工具…';
 }
 
 function toolLabel(toolName) {

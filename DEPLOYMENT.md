@@ -23,7 +23,7 @@ docker compose ps
 Invoke-RestMethod http://127.0.0.1:8080/api/health
 ```
 
-部署前检查脚本只验证变量是否存在和 JWT secret 长度，不输出具体内容；还会检查 Docker 服务并执行 `docker compose config --quiet`。默认入口只绑定 `127.0.0.1:8080`，MySQL 不映射主机端口。MySQL 健康后才启动应用，应用健康后才启动 Nginx；Java 容器以非 root 用户运行，退出时预留 30 秒处理终止信号。首次 PDF 入库会把本地 Embedding 模型下载到持久卷，时间取决于网络。
+部署前检查脚本只验证变量是否存在和 JWT secret 长度，不输出具体内容；还会检查 Docker 服务并执行 `docker compose config --quiet`。默认入口只绑定 `127.0.0.1:8080`，MySQL 不映射主机端口。MySQL 健康后才启动应用，应用健康后才启动 Nginx；Java 容器以非 root 用户运行，退出时预留 30 秒处理终止信号。知识库需额外配置 EMBEDDING_BASE_URL、EMBEDDING_API_KEY、EMBEDDING_MODEL；文档片段通过远程 API 向量化，不再下载本地 ONNX 模型。新向量文件为 langchain4j-vector-store.json；旧文档保留并提示重新索引。
 
 HTTPS 模板为 `compose.https.yaml`，要求支持 `!override` 的 Compose 2.24.4+。自行准备域名和证书文件 `deploy/certs/fullchain.pem`、`deploy/certs/privkey.pem` 后执行：
 
@@ -38,10 +38,10 @@ docker compose -f compose.yaml -f compose.https.yaml up -d --build
 
 ## 上线前剩余门槛
 
-- 安装 Docker Desktop 后，真实验证首次构建、模型下载、容器健康检查、SSE 长连接和持久卷重启恢复。
+- 安装 Docker Desktop 后，真实验证首次构建、远程模型调用、容器健康检查、SSE 长连接和持久卷重启恢复。
 - 准备真实域名和证书后，验证 HTTPS 跳转、证书链与公网访问。
 - 当前请求限流使用进程内计数，不能跨实例共享；反向代理后客户端可能共享代理 IP 的额度。未信任外部 X-Forwarded-For，避免用户伪造 IP 绕过限制。
 - 网页工具拒绝已知内网地址、重定向和超大响应，但 DNS 校验与实际连接间仍有重绑定风险。公网需配置网络出口隔离，禁止容器访问内网及云元数据地址；当前代码不能替代出口防火墙。
 - 本地 JSON 向量存储只支持单实例。文档与向量文件尚无跨文件事务，应测试失败重试和备份恢复。
 - JWT 注销目前仅清理浏览器令牌，不撤销已签发令牌；需补齐撤销、密码找回和账号管理才适合正式账户服务。
-- 已有服务商 Token 用量记录、长对话摘要和异步文档处理；还需费用换算与告警，以及完整端到端演示验收。未返回统计和保存失败的调用不能用于精确对账。
+- 已有服务商 Token 用量记录、长对话摘要和异步文档处理；费用换算与告警已实现；本次框架迁移后的实际验收范围见 docs/PROJECT_STATUS.md，容器和公网端到端验收仍需执行。未返回统计和保存失败的调用不能用于精确对账。
