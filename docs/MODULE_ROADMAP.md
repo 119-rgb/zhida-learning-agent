@@ -1,6 +1,31 @@
 # 知答分模块学习与实现路线
 
-目标是能独立解释和修改 Java 后端项目。迁移到 LangChain4j + Spring MVC 后，按下面顺序阅读并实现；每个模块完成一个可运行结果，再进入下一个。当前迁移正在执行，最终验收状态见 PROJECT_STATUS.md。
+目标是能独立解释和修改 Java 后端项目。售后平台模块 1 后端已实现并通过隔离验收；原研究助手仍可单独学习。每个模块完成可运行结果和验证后再进入下一项，状态以 PROJECT_STATUS.md 和当前测试为准。
+
+## 售后模块 1：工单核心（已实现、自动验证）
+
+入口：`support` 业务包、`SupportConfiguration`、`/api/v1/support`。
+
+学习：Spring Security 中的服务端角色解析、JDBC/TransactionTemplate、条件更新、乐观版本控制、状态机、唯一约束、审计事件与 HTTP 权限。
+
+范围：新增独立的工单、回复、事件、分类和账户角色表，不修改旧聊天数据。注册账户默认 `USER`；客服与管理员角色由数据库显式配置。工单不关联订单；`PENDING → PROCESSING → AWAITING_CONFIRMATION → CLOSED`，用户可在待确认阶段退回处理。创建使用用户级 `requestId` 幂等，所有变更携带 `expectedVersion`。模块必须同时启用售后开关、JWT 和持久化。
+
+完成标准：能解释为什么角色与 owner 不从请求读取，如何以状态/version/assignee 条件更新避免并发覆盖，以及为什么工单变更、处理记录和审计事件需要同一事务。不能把计划中的订单、RAG、Agent 或页面写成已实现。
+
+后续售后模块依次为：
+
+1. 虚构订单与订单归属校验。
+2. 售后知识库与检索（RAG）。
+3. 售后 Agent 与人工客服协作边界。
+4. 用户、客服、管理员三端页面与演示环境。
+
+工单接口、独立表和虚构 HTTP 演示见 [SUPPORT_DATABASE.md](SUPPORT_DATABASE.md) 与 [SUPPORT_DEMO.md](SUPPORT_DEMO.md)。
+
+下一售后模块验收：虚构产品及已付款未开通、待付款、已开通订单；订单查询和工单订单关联必须归本人；订单工具只查询。RAG 阶段验证公共与私人文档边界、出处和检索不足；Agent 阶段验证草稿确认、失败降级及提示注入边界；页面阶段用完整虚构闭环做浏览器验收。上述均为计划。
+
+模块 1 新增 17 项自动测试，全量 99 项（1 项真实 MySQL 跳过）。先阅读 SupportTicketServiceTest、SupportTicketHttpTest、SupportConfigurationTest，解释真实并发、快照读取与审计故障注入。
+
+## 原研究助手学习路线
 
 ## 模块 1：普通聊天与模型接入
 

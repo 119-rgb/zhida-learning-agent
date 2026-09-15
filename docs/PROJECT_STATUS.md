@@ -1,4 +1,28 @@
-# 项目状态：2026-09-15 框架迁移
+# 项目状态：2026-09-16 智能售后工单平台
+
+## 模块 1：已实现并自动验收
+
+- 用户创建、查询本人工单、补充、退回处理、确认关闭评价；客服待受理队列、本人列表、接单、回复和方案；管理员分类管理与分配。
+- 服务端数据库角色 USER/CUSTOMER_SERVICE/ADMIN；拒绝游客及跨用户资源访问，注册不能提权。模块需同时开启 JWT 与数据库。
+- PENDING → PROCESSING → AWAITING_CONFIRMATION → CLOSED；未解决退回 PROCESSING，关闭不可变更。
+- 创建需 confirmed=true，用户级 requestId 与规范化摘要防重复；版本/状态/客服条件更新防覆盖，工单/回复/审计同事务；详情用独立只读可重复读快照。
+- 仅新增 support 表与索引，不修改/删除旧聊天、用户或知识库数据，不写默认账户/密码。
+
+## 本次实际验证
+
+`mvn clean verify -q '-Dzhida.build.directory=tmp/support-build'` 成功退出：99 项、0 失败、0 错误、1 项真实 MySQL 测试跳过。新增 17 项，保留原 82 项。JAR：tmp/support-build/zhida-learning-agent-0.1.0-SNAPSHOT.jar。独立目录避开旧演示 JAR 的文件锁，默认构建仍为 target。
+
+真实 JWT/Tomcat HTTP 验证完整闭环、记录、评价、用户隔离、游客/普通用户越权、角色伪造、分配与分类停用。隔离 H2 验证并发创建和抢单（各 5 次竞争）、内容冲突、序列化冲突 409、创建/回复/分类审计失败整体回滚、详情并发一致快照。竞争次数是测试覆盖，不是吞吐或压测数据。新增 HTTP 测试的密码/JWT 密钥运行时生成，不写文件。
+
+真实 MySQL、真实模型/Embedding/Tavily、售后页面浏览器、Docker 验收本次未执行。旧研究助手仍兼容，订单、售后 RAG、售后 Agent 和三端页面未实现；下一步为虚构产品与订单及归属校验。
+
+## 本次 Git 与隐私
+
+开发分支 codex/after-sales-tickets，身份已核实为 GitHub 昵称与 noreply。原有 AGENTS.md 保留不改，日志/产物/私人 data/archive 不发布，当前文档中的身份路径已清理。远端历史仍含个人邮箱及路径；本次未重写远端、未强推、未继续发布含问题祖先的新分支。处理方案见 PRIVACY_REVIEW.md，需历史重写专项授权。
+
+## 2026-09-15 框架迁移：历史记录
+
+以下保留为上一阶段记录，不替代本次工单验收。
 
 ## 当前框架
 

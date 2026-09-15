@@ -2,9 +2,33 @@
 
 以下是迁移后的项目描述，使用前应完成 MODULE_ROADMAP.md 对应模块的学习，能从源码解释每条。真实供应商、压测和上线状态以 PROJECT_STATUS.md 为准。
 
-## 简历项目文本
+## 智能售后工单平台（模块 1 已实现、隔离验收）
 
-**知答——学习与研究助手**
+以下表述只适用于能够从当前源码和验证记录中解释的模块 1 内容；不要写成完整 AI 售后系统。
+
+**知答——智能售后工单平台（工单核心模块）**
+
+技术栈：Java 17、Spring Boot、Spring MVC、MySQL、Spring Security、JWT。
+
+- 设计并实现独立售后工单模型，覆盖 `PENDING`、`PROCESSING`、`AWAITING_CONFIRMATION`、`CLOSED` 状态，以及用户补充、客服接单/回复/方案、用户确认评价和退回处理等服务端状态约束。
+- 基于 JWT 身份和数据库角色实施 USER、CUSTOMER_SERVICE、ADMIN 权限边界；注册账户默认 USER，客服与管理员角色由运维配置，资源读取按工单归属与处理人校验。
+- 使用用户级 `requestId` 实现创建幂等，并以 `expectedVersion` 和条件更新处理并发冲突；在同一事务中提交工单变更、回复/处理记录和审计事件。
+
+不要声称订单归属、售后 RAG/Agent、三端页面或真实 MySQL 压测已经完成。模块 1 新增 17 项自动测试，全量 99 项（1 项真实 MySQL 跳过），不将此数字表述为生产经验或性能数据。
+
+| 面试问题 | 对应源码与测试 | 解释要点 |
+| --- | --- | --- |
+| 如何限制角色和归属？ | support/SupportActorResolver、SupportTicketService；SupportTicketHttpTest | JWT 给出身份，角色每次从数据库重查，资源还需归属校验 |
+| 为什么有四种状态？ | SupportTicketService.change；状态转换测试 | 客服提供方案后仍需用户确认，未解决可退回处理 |
+| 重复和并发如何处理？ | Service.create、Repository.update；并发创建/接单测试 | 唯一幂等键绑定规范化内容；版本、状态、客服条件更新 |
+| 为什么业务与审计同事务？ | Service.write、Repository.event/reply；审计失败测试 | 同提交、同回滚，失败不保留部分工单变更 |
+| 详情会读到混合版本吗？ | Repository.readTransaction；并发详情测试 | 独立可重复读事务读取本体与关联记录 |
+
+售后项目口述：项目提供用户、客服、管理员的工单接口。用户确认建单，客服接单回复并提交方案，用户确认后关闭评价，未解决可退回处理。后端以状态和角色限制操作，用唯一 requestId 防重复、版本条件更新防覆盖，并将业务变化与审计同事务提交。当前完成的是工单后端，订单、售后 RAG 和 Agent 是下一阶段。
+
+## 原研究助手的简历项目文本
+
+**知答——学习与研究助手（兼容保留）**
 
 技术栈：Java 17、Spring Boot、Spring MVC、LangChain4j、MySQL、Spring Security、JWT、PDFBox、SSE。
 

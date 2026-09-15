@@ -1,10 +1,10 @@
-> 2026-09-15：已批准迁移为 LangChain4j + Spring MVC + 远程 Embedding。当前技术表已更新；历史验收叙述保留为旧版记录，最新状态以 docs/PROJECT_STATUS.md 与当前源码为准。
+> 2026-09-16：产品已改为智能售后工单平台。本文件保留为原研究助手的历史设计，不是当前售后需求。当前售后规则见 docs/superpowers/specs/2026-09-16-support-ticket-design.md，模块状态见 docs/PROJECT_STATUS.md。
 
 # 知答：通用学习与研究 Agent 开发 Spec
 
 > 文档状态：已确认，可执行  
 > Spec 版本：v1.0  
-> 项目目录：`.`  
+> 项目目录：仓库根目录
 > 参考项目：`_reference/spring-ai-alibaba-examples/spring-ai-alibaba-agent-example/playground-flight-booking`  
 > 协作方式：Codex 基于官方 GitHub 项目生成、修改并验证代码；用户通过运行、阅读和提问掌握实现；Codex 负责逐模块讲解和面试追问。
 

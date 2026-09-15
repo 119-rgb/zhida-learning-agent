@@ -15,13 +15,14 @@
     <artifactId>zhida-learning-agent</artifactId>
     <version>0.1.0-SNAPSHOT</version>
     <name>zhida-learning-agent</name>
-    <description>Java learning and research agent built with LangChain4j and Spring MVC</description>
+    <description>Intelligent after-sales ticket platform with LangChain4j and Spring MVC</description>
 
     <properties>
         <java.version>17</java.version>
         <langchain4j.version>1.20.0</langchain4j.version>
         <pdfbox.version>3.0.5</pdfbox.version>
         <jsoup.version>1.21.2</jsoup.version>
+        <zhida.build.directory>target</zhida.build.directory>
     </properties>
 
     <dependencies>
@@ -79,6 +80,7 @@
     </dependencies>
 
     <build>
+        <directory>${zhida.build.directory}</directory>
         <plugins>
             <plugin>
                 <groupId>org.springframework.boot</groupId>

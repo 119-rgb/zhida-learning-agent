@@ -1,10 +1,14 @@
-# 知答：Java 学习与研究 Agent
+# 知答——智能售后工单平台
 
-知答是一个采用 **Java 17、Spring Boot 3.5、LangChain4j、Spring MVC、MySQL** 的学习与研究助手。用户输入问题后，服务生成回答计划，模型按需调用联网搜索、网页读取、知识库检索和日期工具，通过 POST + SSE 输出回答。
+知答面向虚构的软件订阅产品，按模块构建售后流程。**模块 1 的工单后端已实现并通过隔离自动验收**，仍兼容原研究助手。订单关联、售后 RAG、售后 Agent 和三端页面是后续模块，不能视为已完成。
 
 本项目于 2026-09-15 迁移到 LangChain4j 与 Spring MVC，原有 Spring AI Alibaba / WebFlux / 本地 BGE ONNX 版本留在 Git 历史中。当前代码不需要部署本地推理模型。
 
 ## 架构
+
+工单业务不依赖模型：HTTP 请求 → JWT 验证 → SupportActorResolver 数据库角色 → SupportTicketService 权限、状态和参数校验 → 工单条件更新、回复、审计同事务 → MySQL（测试为隔离 H2）。详情使用独立的可重复读事务。
+
+以下为兼容保留的研究助手链路，尚未改成售后 Agent：
 
 ```text
 浏览器页面
@@ -42,7 +46,6 @@ LangChain4j StreamingChatModel ↔ 工具调用循环
 环境：JDK 17、Maven 3.9+。
 
 ```powershell
-cd "."
 mvn spring-boot:run
 ```
 
@@ -83,6 +86,16 @@ MySQL 数据库 `zhida_agent` 需提前创建，应用账户需具备该库读�
 
 账户、游客额度和注销局限见 [AUTH_DESIGN.md](AUTH_DESIGN.md)。部署步骤和剩余验收见 [DEPLOYMENT.md](DEPLOYMENT.md)。
 
+## 售后工单核心（模块 1，开发中）
+
+工单模块仅在 `zhida.support.enabled=true`、`ZHIDA_AUTH_ENABLED=true` 和 `ZHIDA_PERSISTENCE_ENABLED=true` 同时启用时运行；它要求 JWT 身份和数据库持久化，不能使用旧研究助手的游客或本地身份。注册账户默认只有 `USER` 角色；`CUSTOMER_SERVICE` 与 `ADMIN` 由数据库运维人员显式配置，服务端从数据库读取角色，接口不接受客户端提交的角色或工单所有者。
+
+模块 1 的工单创建仅包含 `title`、`description`、`categoryId` 和确认字段；没有订单关联。状态流转为 `PENDING`、`PROCESSING`、`AWAITING_CONFIRMATION`、`CLOSED`。用户创建和查看自己的工单、补充说明、确认并评价；客服查看待受理队列或自己的工单、接单、回复和提交方案；管理员管理分类、分配客服并查看全部工单。
+
+服务端接口位于 `/api/v1/support`：`GET /me`、分类 `GET/POST /categories` 与 `PUT /categories/{id}`、工单 `POST/GET /tickets`、详情 `GET /tickets/{id}`，以及 `comments`、`claim`、`replies`、`solution`、`confirm`、`reopen`、`assign` 等变更操作。`GET /tickets?view=mine` 是默认用户本人或客服本人列表，`view=pending` 是客服队列，`view=all` 仅管理员可用。详情返回 `ticket`、`replies`、`events`。创建需要 `confirmed=true`；所有变更请求都需要 `expectedVersion`，用来拒绝并发冲突。用户的 `requestId` 具有幂等语义：同一规范化内容重放返回原工单（201），同一标识但内容不同返回 409。
+
+数据库表、DDL 权限和角色配置示例见 [docs/SUPPORT_DATABASE.md](docs/SUPPORT_DATABASE.md)。无页面演示的 HTTP 流程见 [docs/SUPPORT_DEMO.md](docs/SUPPORT_DEMO.md)。
+
 ## 常用接口
 
 | 接口 | 用途 |
@@ -102,6 +115,11 @@ MySQL 数据库 `zhida_agent` 需提前创建，应用账户需具备该库读�
 | GET /api/v1/knowledge-bases/{id}/documents | 文档与处理状态 |
 | POST /api/v1/knowledge-bases/{id}/documents/{documentId}/retry | 失败文档重试 |
 | GET /api/v1/knowledge-bases/{id}/search?q=问题&topK=5 | 独立向量检索 |
+| GET /api/v1/support/me | 当前 JWT 对应的售后角色 |
+| GET/POST /api/v1/support/categories；PUT /categories/{id} | 分类读取与管理员管理 |
+| POST/GET /api/v1/support/tickets | 创建和按 `view` 查询工单 |
+| GET /api/v1/support/tickets/{id} | 工单、回复和审计事件的一致快照 |
+| POST /api/v1/support/tickets/{id}/comments、claim、replies、solution、reopen、confirm、assign | 对应用户、客服、管理员操作；必需 expectedVersion |
 
 SSE 事件包括 task.started、plan.created、step.started、answer.started、tool.started / completed / failed、answer.delta、task.completed / failed。事件编号按发送顺序递增。没有调用工具时不生成工具事件。
 
@@ -110,6 +128,8 @@ SSE 事件包括 task.started、plan.created、step.started、answer.started、t
 同一 requestId 重提返回 409，不自动重放旧回答。任务成功状态与助手消息在同一事务中提交；数据库写入失败不会发送成功完成事件。失败/取消不会保存半段助手消息。
 
 ## 测试与交付
+
+模块 1 全量回归：99 项、0 失败、0 错误、1 项真实 MySQL 测试跳过；新增工单测试 17 项，可执行 JAR 已打包。旧演示占用 target JAR 时可使用独立目录：`mvn clean verify '-Dzhida.build.directory=tmp/support-build'`。日志、构建产物和私人文件不入 Git。
 
 ```powershell
 mvn clean test

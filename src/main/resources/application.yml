@@ -13,6 +13,8 @@ spring:
       max-request-size: 24MB
 
 zhida:
+  support:
+    enabled: ${ZHIDA_SUPPORT_ENABLED:false}
   cost:
     warning-usd: ${ZHIDA_COST_WARNING_USD:0.01}
   auth:
