@@ -9,6 +9,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 
+/** HTTP 参数校验和认证身份适配；状态、归属和事务规则统一交给业务服务。 */
 @RestController
 @RequestMapping("/api/v1/support")
 @ConditionalOnProperty(name = "zhida.support.enabled", havingValue = "true")
@@ -21,6 +22,7 @@ public class SupportTicketController {
     this.actors = actors;
   }
 
+  // 不定义 userId/owner/role 字段：请求只能描述问题，不能决定工单属于谁或操作者权限。
   public record CreateRequest(
       @NotBlank @Size(max = 64) String requestId,
       @NotBlank @Size(max = 120) String title,
@@ -28,6 +30,7 @@ public class SupportTicketController {
       @NotBlank @Size(max = 36) String categoryId,
       @NotNull @AssertTrue Boolean confirmed) {}
 
+  // 客户端读取工单后提交当时的版本；版本已变化时后端拒绝，客户端应刷新而非盲目重试。
   public record VersionRequest(@NotNull @PositiveOrZero Long expectedVersion) {}
 
   public record ContentRequest(

@@ -1,3 +1,4 @@
+-- 独立角色表复用现有账号；没有记录的账号由服务端按 USER 处理，注册不能提权。
 CREATE TABLE IF NOT EXISTS support_account_role (
     user_id VARCHAR(36) PRIMARY KEY,
     role VARCHAR(24) NOT NULL,
@@ -24,6 +25,8 @@ CREATE TABLE IF NOT EXISTS support_category_event (
     FOREIGN KEY (category_id) REFERENCES support_category(id),
     FOREIGN KEY (actor_id) REFERENCES user_account(id)
 );
+-- request_id 按用户唯一，request_hash 绑定规范化内容；version 用于条件更新防覆盖。
+-- 列表组合索引由 SupportConfiguration 幂等补建，已有同名索引不会自动替换。
 CREATE TABLE IF NOT EXISTS support_ticket (
     id VARCHAR(36) PRIMARY KEY,
     user_id VARCHAR(36) NOT NULL,
@@ -47,6 +50,7 @@ CREATE TABLE IF NOT EXISTS support_ticket (
     FOREIGN KEY (assigned_to) REFERENCES user_account(id),
     FOREIGN KEY (category_id) REFERENCES support_category(id)
 );
+-- 所有业务变更都有一个版本事件；创建为版本 0，状态不变的补充/回复也要记录。
 CREATE TABLE IF NOT EXISTS support_ticket_event (
     ticket_id VARCHAR(36) NOT NULL,
     version BIGINT NOT NULL,
@@ -62,6 +66,7 @@ CREATE TABLE IF NOT EXISTS support_ticket_event (
     FOREIGN KEY (ticket_id) REFERENCES support_ticket(id),
     FOREIGN KEY (actor_id) REFERENCES user_account(id)
 );
+-- 回复引用对应版本的事件，工单变更、事件、回复必须在同一事务提交。
 CREATE TABLE IF NOT EXISTS support_ticket_reply (
     id VARCHAR(36) PRIMARY KEY,
     ticket_id VARCHAR(36) NOT NULL,

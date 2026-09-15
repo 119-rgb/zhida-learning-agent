@@ -142,6 +142,8 @@ mvn package
 
 简历项目说明及源码面试地图见 [docs/RESUME_PROJECT.md](docs/RESUME_PROJECT.md)。完整开发要求见 [DEVELOPMENT_SPEC.md](DEVELOPMENT_SPEC.md)。
 
+分阶段独立审查与修复记录见 [docs/reviews](docs/reviews/README.md)，模块 1 已完成核心审查、修复复查以及中文注释审查。核心注释可从 support/SupportTicketService 和 SupportTicketRepository 开始阅读。
+
 ## 来源
 
 项目最初参考 [Spring AI Alibaba](https://github.com/alibaba/spring-ai-alibaba) 和其官方示例，现在将模型与向量接入迁移到 [LangChain4j](https://github.com/langchain4j/langchain4j)。参考仓库位于被忽略的 `_reference/`，实际业务代码在 `src/`。历史设计与计划文档记录当时实现，请以本 README、当前源码和最新验证记录为准。

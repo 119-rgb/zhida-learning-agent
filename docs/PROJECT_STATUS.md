@@ -18,7 +18,7 @@
 
 ## 本次 Git 与隐私
 
-开发分支 codex/after-sales-tickets，身份已核实为 GitHub 昵称与 noreply。原有 AGENTS.md 保留不改，日志/产物/私人 data/archive 不发布，当前文档中的身份路径已清理。远端历史仍含个人邮箱及路径；本次未重写远端、未强推、未继续发布含问题祖先的新分支。处理方案见 PRIVACY_REVIEW.md，需历史重写专项授权。
+开发分支 codex/after-sales-tickets，身份已核实为 GitHub 昵称与 noreply。原 AGENTS.md 隐私条款保留，追加分阶段审查与注释约定；日志/产物/私人 data/archive 不发布。中文注释及独立审查记录见 reviews/2026-09-16-module-1.md。历史清理已获用户专项授权；替代历史与最终源码树核对完成后，经全历史检查及系统 Git 登录再执行远端更新。处理方案见 PRIVACY_REVIEW.md，结果以实际远端引用复核为准。
 
 ## 2026-09-15 框架迁移：历史记录
 

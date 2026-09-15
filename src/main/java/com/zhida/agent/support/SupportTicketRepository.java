@@ -8,19 +8,20 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.transaction.support.TransactionTemplate;
 
+/** 工单 SQL 与记录映射；调用前由业务服务完成授权，写操作必须处于业务事务中。 */
 public class SupportTicketRepository {
   public enum Status {
-    PENDING,
-    PROCESSING,
-    AWAITING_CONFIRMATION,
-    CLOSED
+    PENDING, // 待受理
+    PROCESSING, // 已由客服处理
+    AWAITING_CONFIRMATION, // 客服已提交方案，等待用户判断是否解决
+    CLOSED // 用户确认并评价后关闭，不再修改
   }
 
   public record Ticket(
       String id,
       String userId,
       String requestId,
-      @com.fasterxml.jackson.annotation.JsonIgnore String requestHash,
+      @com.fasterxml.jackson.annotation.JsonIgnore String requestHash, // 仅用于后端幂等校验，不输出给页面。
       String title,
       String description,
       String categoryId,
@@ -58,6 +59,7 @@ public class SupportTicketRepository {
   public SupportTicketRepository(JdbcTemplate jdbc, TransactionTemplate tx) {
     this.jdbc = jdbc;
     this.tx = tx;
+    // 只提高详情读事务的隔离级别；写事务保持数据源配置，并用条件更新防并发覆盖。
     readTx = new TransactionTemplate(java.util.Objects.requireNonNull(tx.getTransactionManager()));
     readTx.setIsolationLevel(
         org.springframework.transaction.TransactionDefinition.ISOLATION_REPEATABLE_READ);
@@ -108,6 +110,7 @@ public class SupportTicketRepository {
   }
 
   List<Ticket> list(String predicate, Object... args) {
+    // predicate 只允许来自 Service 中固定的分支，绝不能拼接前端传入的过滤表达式。
     return jdbc.query(
         "SELECT * FROM support_ticket WHERE "
             + predicate
@@ -169,6 +172,8 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?)
       Integer rating,
       String evaluation,
       Instant now) {
+    // 一个 SQL 同时比较旧版本、旧状态和旧处理人。受影响行数为 0 时，Service 返回冲突。
+    // NULL 处理人需显式比较，不能简单使用 assigned_to=? 来判断未接单工单。
     return jdbc.update(
         """
 UPDATE support_ticket SET status=?,assigned_to=?,solution=?,rating=?,evaluation=?,version=version+1,updated_at=?
@@ -195,6 +200,8 @@ WHERE id=? AND version=? AND status=? AND (assigned_to=? OR (assigned_to IS NULL
       Status next,
       String assigned,
       Instant now) {
+    // 主键确保同一版本至多一条事件；每次变更都有事件还依赖 Service 的同事务插入。
+    // 创建对应版本 0，后续变更对应递增版本，审计失败时业务变更一同回滚。
     jdbc.update(
         """
 INSERT INTO support_ticket_event(ticket_id,version,action,actor_id,actor_role,from_status,to_status,previous_assignee,assigned_to,created_at)

@@ -5,9 +5,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
-/**
- * Only controllers resolve the authenticated principal; roles never come from JWT claims or DTOs.
- */
+/** 身份取自经过 Spring Security 验证的 Principal；角色取自数据库，不信任请求或模型参数。 */
 public class SupportActorResolver {
   public record Actor(String id, SupportRole role) {}
 
@@ -18,11 +16,13 @@ public class SupportActorResolver {
   }
 
   public Actor resolve(Principal principal) {
+    // JWT 主体才是访问者，HTTP 请求中的 userId/owner 不能替代它。
     if (principal == null) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "请先登录");
     return account(principal.getName());
   }
 
   public Actor account(String id) {
+    // 没有显式角色记录的旧账户与新注册账户都视为 USER；游客不能借此进入售后业务。
     var rows =
         jdbc.query(
             """

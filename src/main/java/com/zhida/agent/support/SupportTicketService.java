@@ -13,8 +13,9 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 
 /**
- * Authorizes and validates even direct service calls; all ticket changes and events share a
- * transaction.
+ * 工单业务入口：先检查真实角色与资源归属，再验证状态，最后在同一事务中写业务与审计。
+ *
+ * <p>Controller 的参数校验只是第一层；将来由其他 Java 服务调用时，也必须遵守这里的业务规则。
  */
 public class SupportTicketService {
   private final SupportTicketRepository repository;
@@ -29,6 +30,7 @@ public class SupportTicketService {
       String requestId, String title, String description, String categoryId, Boolean confirmed) {}
 
   private Actor refresh(Actor supplied) {
+    // Actor 中的 role 不作为授权依据；重新查库，防止伪造角色或继续使用已经撤销的角色。
     if (supplied == null) throw error(HttpStatus.UNAUTHORIZED, "请先登录");
     return actors.account(supplied.id());
   }
@@ -49,6 +51,7 @@ public class SupportTicketService {
     try {
       return write(
           status -> {
+            // 与创建工单共用分类行锁，避免检查“启用”之后分类又被并发停用。
             Category old =
                 id == null ? null : repository.category(id, true).orElseThrow(() -> missing());
             String categoryId = old == null ? UUID.randomUUID().toString() : old.id();
@@ -71,6 +74,7 @@ public class SupportTicketService {
                       enabled,
                       version,
                       categoryId);
+            // 分类修改与分类审计共用当前事务，不能修改成功但丢失操作记录。
             repository
                 .jdbc()
                 .update(
@@ -97,6 +101,7 @@ VALUES (?,?,?,?,?,?,?,?,?)
   public Ticket create(Actor supplied, Create request) {
     Actor actor = refresh(supplied);
     role(actor, USER);
+    // 创建是用户确认后的业务接口；缺失/false 均拒绝，不能把待确认草稿直接作为工单保存。
     if (request == null || !Boolean.TRUE.equals(request.confirmed()))
       throw error(HttpStatus.BAD_REQUEST, "必须明确确认创建工单");
     String key = text(request.requestId(), 64, "requestId");
@@ -104,6 +109,8 @@ VALUES (?,?,?,?,?,?,?,?,?)
     String description = text(request.description(), 4000, "问题描述");
     String category = text(request.categoryId(), 36, "分类");
     String hash = hash(title, description, category);
+    // 先查用于快速重放；最终防重复仍依靠数据库 (user_id, request_id) 唯一约束。
+    // 在检查分类启用前重放，使已经创建的请求不会因分类后来停用而失去幂等性。
     var existing = repository.byRequest(actor.id(), key);
     if (existing.isPresent()) return replay(existing.get(), hash);
     try {
@@ -132,13 +139,13 @@ VALUES (?,?,?,?,?,?,?,?,?)
                     0,
                     now,
                     now);
+            // 创建记录和版本 0 的 CREATED 事件一起提交；审计失败时工单也回滚。
             repository.insert(ticket);
             repository.event(ticket, 0, "CREATED", actor, PENDING, null, now);
             return ticket;
           });
     } catch (DuplicateKeyException e) {
-      // The losing insert transaction has rolled back; read the committed winner in a fresh
-      // transaction.
+      // 并发插入的失败事务已退出并回滚，此时才读取赢家已提交的工单，避免在失败事务中继续查询。
       return repository
           .byRequest(actor.id(), key)
           .map(t -> replay(t, hash))
@@ -147,6 +154,7 @@ VALUES (?,?,?,?,?,?,?,?,?)
   }
 
   private Ticket replay(Ticket ticket, String hash) {
+    // 相同 key 只允许重放相同规范化内容；不能用同一个 key 悄悄替换问题描述。
     if (!ticket.requestHash().equals(hash)) throw conflict("requestId 已用于不同内容");
     return ticket;
   }
@@ -172,7 +180,7 @@ VALUES (?,?,?,?,?,?,?,?,?)
 
   public Detail detail(Actor supplied, String id) {
     Actor actor = refresh(supplied);
-    // A transaction gives the ticket version and its replies/events one repeatable-read snapshot.
+    // 本调用链没有外层事务；独立 RR 事务让本体、回复、事件属于同一快照，避免混合新旧版本。
     return repository.readTransaction().execute(status -> repository.detail(accessible(actor, id)));
   }
 
@@ -185,6 +193,7 @@ VALUES (?,?,?,?,?,?,?,?,?)
               ticket.status() == PENDING || actor.id().equals(ticket.assignedTo());
           case ADMIN -> true;
         };
+    // 无权限与不存在统一返回 404，避免跨账号探测工单是否存在。
     if (!allowed) throw missing();
     return ticket;
   }
@@ -227,6 +236,7 @@ VALUES (?,?,?,?,?,?,?,?,?)
       Integer score,
       String evaluation) {
     Actor actor = refresh(supplied);
+    // 第一道门是操作角色；第二道门 accessible 检查“这个角色能否操作这张工单”。
     SupportRole required =
         switch (action) {
           case "COMMENT", "REOPEN", "CONFIRM" -> USER;
@@ -253,8 +263,9 @@ VALUES (?,?,?,?,?,?,?,?,?)
           String solution = old.solution();
           Integer rating = old.rating();
           String review = old.evaluation();
+          // 状态转换集中在一个入口；不存在绕过用户确认直接关闭的客服/管理员操作。
           switch (action) {
-            case "COMMENT" -> {}
+            case "COMMENT" -> {} // 补充不改变状态，但仍增加版本并记录事件。
             case "CLAIM" -> {
               requireState(old, PENDING);
               if (assigned != null) throw conflict("工单已被接单");
@@ -265,11 +276,13 @@ VALUES (?,?,?,?,?,?,?,?,?)
               requireState(old, PROCESSING);
               if (!actor.id().equals(assigned)) throw missing();
               if (action.equals("SOLUTION")) {
+                // 提交方案不代表问题已解决，后续必须由工单发起人确认。
                 next = AWAITING_CONFIRMATION;
                 solution = body;
               }
             }
             case "REOPEN" -> {
+              // 用户未解决时退回原客服，保留此前方案及回复作为处理历史。
               requireState(old, AWAITING_CONFIRMATION);
               next = PROCESSING;
             }
@@ -297,8 +310,10 @@ VALUES (?,?,?,?,?,?,?,?,?)
             default -> throw new IllegalArgumentException("未知工单操作");
           }
           Instant now = Instant.now();
+          // 前面的 SELECT 只是判断依据；UPDATE 中的版本/状态/处理人条件才是并发胜负的裁决。
           if (repository.update(old, next, assigned, solution, rating, review, now) != 1)
             throw conflict("工单被其他操作修改，请刷新后重试");
+          // 三次写共用同一事务。任一事件/回复插入失败，工单状态和版本也不会留下部分变更。
           repository.event(old, old.version() + 1, action, actor, next, assigned, now);
           if (body != null) repository.reply(id, old.version() + 1, actor.id(), action, body, now);
           return repository.find(id).orElseThrow(() -> missing());
@@ -314,6 +329,7 @@ VALUES (?,?,?,?,?,?,?,?,?)
     try {
       return repository.transaction().execute(work::apply);
     } catch (org.springframework.dao.ConcurrencyFailureException error) {
+      // TransactionTemplate 已完成回滚；不自动重做业务，让客户端刷新版本后明确重试。
       throw conflict("数据库并发冲突，请刷新后重试");
     }
   }
@@ -327,6 +343,7 @@ VALUES (?,?,?,?,?,?,?,?,?)
   private static String hash(String... values) {
     try {
       var digest = java.security.MessageDigest.getInstance("SHA-256");
+      // 长度前缀避免不同字段组合拼成相同字符串；调用者先 trim，确保幂等比较稳定。
       for (String value : values)
         digest.update(
             (value.length() + ":" + value).getBytes(java.nio.charset.StandardCharsets.UTF_8));
