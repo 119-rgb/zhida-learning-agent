@@ -1,8 +1,29 @@
-# 售后工单 HTTP 演示（模块 1–2）
+# 售后工单 HTTP 演示（模块 1–3）
 
 此演示使用虚构业务，面向已启用售后、JWT 与持久化的隔离环境。当前没有售后网页流程；以下是 HTTP 调用顺序，不代表用户、客服或管理员页面已经完成。先按 [SUPPORT_DATABASE.md](SUPPORT_DATABASE.md) 配置数据库和角色，并分别取得虚构用户、客服、管理员的 JWT。
 
 示例中的 `<user-jwt>`、`<agent-jwt>`、`<admin-jwt>`、`<user-id>`、`<product-id>`、`<order-id>`、`<ticket-id>` 与 `<category-id>` 均为占位符，不能替换为或记录真实凭据。
+
+## 0. 管理员维护公共售后知识库
+
+知识库列表会展示公共库 `product-support`。管理员可上传虚构产品说明；普通用户和客服只能读取、检索，上传会返回 403。
+
+```http
+POST /api/v1/knowledge-bases/product-support/documents
+Authorization: Bearer <admin-jwt>
+Content-Type: multipart/form-data
+
+file=@docs/demo/fictional-product-support.md
+```
+
+文档变为 READY 后，用户可检索：
+
+```http
+GET /api/v1/knowledge-bases/product-support/search?q=付款后为什么没有开通&topK=5
+Authorization: Bearer <user-jwt>
+```
+
+命中结果包含 `filename`、PDF 的 `pageNumber` 或文本的 `chunkIndex`。没有可用片段时返回 `evidenceSufficient=false` 和 `nextAction`，明确提示资料不足并允许继续走手动建单流程。私人知识库仍属于创建用户，管理员不能借公共库维护权限访问。
 
 ## 1. 管理员创建一个虚构分类
 
@@ -129,4 +150,4 @@ Content-Type: application/json
 
 `GET /api/v1/support/tickets?view=mine` 为默认查询：用户只看到自己的工单，客服只看到本人处理的工单。客服可用 `view=pending` 查看待受理队列，管理员可用 `view=all` 查看全部记录。`GET /api/v1/support/tickets/<ticket-id>` 返回 `ticket`、`replies`、`events`。
 
-自动验收已用真实 JWT/HTTP 验证权限、订单归属及完整状态闭环，用隔离 H2 验证并发、幂等、事务回滚和旧表升级。全量 108 项（1 项真实 MySQL 跳过），模块 2 新增 9 项。真实 MySQL、真实模型和售后页面浏览器验收本次未执行。
+自动验收已用真实 JWT/HTTP 验证权限、公共/私人知识边界、订单归属及完整状态闭环，用隔离 H2 和向量替身验证并发、幂等、事务回滚、旧表升级、命名空间隔离与出处响应。全量 113 项（1 项真实 MySQL 跳过），模块 3 新增 5 项。真实 MySQL、真实模型/Embedding 和售后页面浏览器验收本次未执行。

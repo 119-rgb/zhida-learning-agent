@@ -1,6 +1,6 @@
 # 知答——智能售后工单平台
 
-知答面向虚构的软件订阅产品，按模块构建售后流程。**模块 1 工单后端和模块 2 产品/模拟订单已实现并通过隔离自动验收**，仍兼容原研究助手。售后 RAG、售后 Agent 和三端页面是后续模块，不能视为已完成。
+知答面向虚构的软件订阅产品，按模块构建售后流程。**模块 1 工单后端、模块 2 产品/模拟订单和模块 3 售后知识库已实现并通过隔离自动验收**，仍兼容原研究助手。售后 Agent 和三端页面是后续模块，不能视为已完成。
 
 本项目于 2026-09-15 迁移到 LangChain4j 与 Spring MVC，原有 Spring AI Alibaba / WebFlux / 本地 BGE ONNX 版本留在 Git 历史中。当前代码不需要部署本地推理模型。
 
@@ -41,6 +41,8 @@ LangChain4j StreamingChatModel ↔ 工具调用循环
 - requestId 数据库幂等、会话并发限制、任务取消、总超时、工具预算、每日额度和请求限流。
 - 根据供应商 Token 用量估算 DeepSeek 费用上限；未知模型、缺失统计与调用时间明确标为不完整。
 - 售后模块提供明确标记为模拟数据的产品与订单，覆盖待付款、已付款未开通、已开通；本人订单查询和工单关联均在服务端校验 owner。
+- 固定公共售后知识库 `product-support` 由管理员维护，正式账号可检索；用户私人知识库继续按 JWT owner 隔离，管理员不能越权读取。
+- 检索命中返回文件名、PDF 页码或文本片段编号；无可用依据时返回 `evidenceSufficient=false` 和手动创建工单指引。
 
 ## 启动
 
@@ -79,6 +81,8 @@ DeepSeek 聊天密钥不会自动用于 Embedding。未配置时仍可启动页�
 
 当前向量存储适合单实例学习演示，尚无跨文档目录/向量文件事务或多实例写入能力。
 
+售后模块开启后，`GET /api/v1/knowledge-bases` 会同时返回私人知识库和固定公共库 `product-support`，并用 `visibility`、`writable` 标明边界。普通用户与客服可读取和检索公共资料，只有管理员可上传、重试或删除公共资料；任何角色都不能借公共库权限访问其他用户的私人文档。公共库建议只上传虚构产品手册、服务开通说明、常见故障和售后规则。详见 [docs/SUPPORT_KNOWLEDGE.md](docs/SUPPORT_KNOWLEDGE.md)。
+
 ## 数据库与登录
 
 MySQL 数据库 `zhida_agent` 需提前创建，应用账户需具备该库读写和建表权限。通过环境变量设置 DB_URL、DB_USERNAME、DB_PASSWORD，再开启 `ZHIDA_PERSISTENCE_ENABLED=true`。默认关闭数据库时不提供持久化幂等和重启后聊天恢复。
@@ -87,7 +91,7 @@ MySQL 数据库 `zhida_agent` 需提前创建，应用账户需具备该库读�
 
 账户、游客额度和注销局限见 [AUTH_DESIGN.md](AUTH_DESIGN.md)。部署步骤和剩余验收见 [DEPLOYMENT.md](DEPLOYMENT.md)。
 
-## 售后工单与模拟订单（模块 1–2，已实现）
+## 售后工单、模拟订单与知识库（模块 1–3，已实现）
 
 工单模块仅在 `zhida.support.enabled=true`、`ZHIDA_AUTH_ENABLED=true` 和 `ZHIDA_PERSISTENCE_ENABLED=true` 同时启用时运行；它要求 JWT 身份和数据库持久化，不能使用旧研究助手的游客或本地身份。注册账户默认只有 `USER` 角色；`CUSTOMER_SERVICE` 与 `ADMIN` 由数据库运维人员显式配置，服务端从数据库读取角色，接口不接受客户端提交的角色或工单所有者。
 
@@ -113,8 +117,8 @@ MySQL 数据库 `zhida_agent` 需提前创建，应用账户需具备该库读�
 | GET /api/v1/tasks/{id}/usage | 模型用量 |
 | GET /api/v1/tasks/{id}/cost | 保守费用上限与告警 |
 | GET /api/v1/tasks/{id}/memories | 本次实际参考的记忆 |
-| GET /api/v1/knowledge-bases | 自己的知识库 |
-| POST /api/v1/knowledge-bases/{id}/documents | MultipartFile 上传，返回 202 |
+| GET /api/v1/knowledge-bases | 私人知识库，以及售后模式下的公共产品知识库 |
+| POST /api/v1/knowledge-bases/{id}/documents | MultipartFile 上传，公共库仅管理员可写，返回 202 |
 | GET /api/v1/knowledge-bases/{id}/documents | 文档与处理状态 |
 | POST /api/v1/knowledge-bases/{id}/documents/{documentId}/retry | 失败文档重试 |
 | GET /api/v1/knowledge-bases/{id}/search?q=问题&topK=5 | 独立向量检索 |
@@ -135,7 +139,7 @@ SSE 事件包括 task.started、plan.created、step.started、answer.started、t
 
 ## 测试与交付
 
-模块 2 全量回归：108 项、0 失败、0 错误、1 项真实 MySQL 测试跳过；模块 2 新增 9 项，可执行 JAR 已打包。旧演示占用 target JAR 时可使用独立目录：`mvn clean verify '-Dzhida.build.directory=tmp/module2-build'`。日志、构建产物和私人文件不入 Git。
+模块 3 全量回归：113 项、0 失败、0 错误、1 项真实 MySQL 测试跳过；模块 3 新增 5 项，可执行 JAR 已打包。旧演示占用 target JAR 时可使用独立目录：`mvn clean verify '-Dzhida.build.directory=tmp/module3-final-build'`。日志、构建产物和私人文件不入 Git。
 
 ```powershell
 mvn clean test
@@ -148,7 +152,7 @@ mvn package
 
 简历项目说明及源码面试地图见 [docs/RESUME_PROJECT.md](docs/RESUME_PROJECT.md)。完整开发要求见 [DEVELOPMENT_SPEC.md](DEVELOPMENT_SPEC.md)。
 
-分阶段独立审查与修复记录见 [docs/reviews](docs/reviews/README.md)，模块 1–2 均已完成独立审查和修复复查。工单注释可从 SupportTicketService 开始，订单边界从 ProductOrderService 与 ProductOrderRepository 开始。
+分阶段独立审查与修复记录见 [docs/reviews](docs/reviews/README.md)，模块 1–3 均已完成独立审查和修复复查。工单注释可从 SupportTicketService 开始，订单边界从 ProductOrderService 与 ProductOrderRepository 开始，知识库边界从 KnowledgeBaseAccessService 开始。
 
 ## 来源
 

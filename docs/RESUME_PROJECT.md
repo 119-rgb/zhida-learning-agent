@@ -2,21 +2,22 @@
 
 以下是迁移后的项目描述，使用前应完成 MODULE_ROADMAP.md 对应模块的学习，能从源码解释每条。真实供应商、压测和上线状态以 PROJECT_STATUS.md 为准。
 
-## 智能售后工单平台（模块 1–2 已实现、隔离验收）
+## 智能售后工单平台（模块 1–3 已实现、隔离验收）
 
-以下表述只适用于能够从当前源码和验证记录中解释的工单与模拟订单内容；不要写成完整 AI 售后系统。
+以下表述只适用于能够从当前源码和验证记录中解释的工单、模拟订单与售后知识库内容；不要写成完整 AI 售后系统。
 
 **知答——智能售后工单平台（工单与模拟订单模块）**
 
-技术栈：Java 17、Spring Boot、Spring MVC、MySQL、Spring Security、JWT。
+技术栈：Java 17、Spring Boot、Spring MVC、MySQL、Spring Security、JWT、LangChain4j、PDFBox、SSE。
 
 - 设计并实现独立售后工单模型，覆盖 `PENDING`、`PROCESSING`、`AWAITING_CONFIRMATION`、`CLOSED` 状态，以及用户补充、客服接单/回复/方案、用户确认评价和退回处理等服务端状态约束。
 - 基于 JWT 身份和数据库角色实施 USER、CUSTOMER_SERVICE、ADMIN 权限边界；注册账户默认 USER，客服与管理员角色由运维配置，资源读取按工单归属与处理人校验。
 - 使用用户级 `requestId` 实现创建幂等，并以 `expectedVersion` 和条件更新处理并发冲突；在同一事务中提交工单变更、回复/处理记录和审计事件。
 - 设计明确标记为虚构数据的产品/订单模型，覆盖待付款、已付款未开通和已开通场景；订单查询按认证用户归属过滤，工单关联订单时再次校验 owner，拒绝跨用户访问。
 - 管理员模拟订单写入以 `(created_by, requestId)` 唯一约束防重复，并与审计事件同事务提交；查询侧不提供支付、退款或开通状态修改能力，为后续只读 AI 工具保留安全边界。
+- 复用 PDF/TXT/Markdown 解析、分块与向量检索链路实现公共售后知识库；公共资料仅管理员维护，用户私人文档按 JWT owner 隔离，检索返回文件名、页码/片段出处并对依据不足提供手动建单降级。
 
-不要声称售后 RAG/Agent、三端页面、真实支付集成或真实 MySQL 压测已经完成。自动测试数量以 PROJECT_STATUS.md 的最新实际执行记录为准，不将测试数量表述为生产经验或性能数据。
+不要声称售后 Agent、三端页面、真实支付集成或真实 MySQL 压测已经完成。自动测试数量以 PROJECT_STATUS.md 的最新实际执行记录为准，不将测试数量表述为生产经验或性能数据。
 
 | 面试问题 | 对应源码与测试 | 解释要点 |
 | --- | --- | --- |
@@ -28,8 +29,10 @@
 | 订单为什么不会串用户？ | ProductOrderRepository.ownedOrder/orders；SupportOrderHttpTest | owner 条件进入 SQL，JWT 用户不能由请求覆盖，跨用户统一 404 |
 | 模拟订单为何仍要幂等和审计？ | ProductOrderService.createOrder；ProductOrderServiceTest | 管理员重试也会重复造数；唯一键裁决并发，订单与 CREATED 事件同事务 |
 | AI 能修改付款或开通吗？ | SupportOrderController、ProductOrderService | 只有管理员创建初始模拟状态，没有状态更新业务方法；后续工具仅接查询 |
+| 公共知识库为什么不会泄露私人文档？ | KnowledgeBaseAccessService、SupportKnowledgeHttpTest | 公共固定命名空间与私人 owner 哈希命名空间分开；公共写入查 ADMIN，私人访问仍按 owner 查存在性 |
+| RAG 资料不足怎么办？ | KnowledgeBaseService.search、KnowledgeSearchResponse | 空命中不生成确定答案，返回证据不足和下一步；命中必须携带文件与页码/片段编号 |
 
-售后项目口述：项目提供用户、客服、管理员的工单接口，以及虚构产品和模拟订单。用户只能查询自己的订单，关联订单建单时后端再次校验归属。客服接单回复并提交方案，用户确认后关闭评价，未解决可退回处理。后端以状态和角色限制操作，用唯一 requestId 防重复、版本条件更新防覆盖，并将业务变化与审计同事务提交。当前已完成工单和模拟订单后端，售后 RAG、Agent 与页面是后续阶段。
+售后项目口述：项目提供用户、客服、管理员的工单接口，以及虚构产品和模拟订单。用户只能查询自己的订单，关联订单建单时后端再次校验归属。客服接单回复并提交方案，用户确认后关闭评价，未解决可退回处理。后端以状态和角色限制操作，用唯一 requestId 防重复、版本条件更新防覆盖，并将业务变化与审计同事务提交。知识库复用原有文档解析与向量检索，公共售后资料仅管理员维护，私人文档仍按 owner 隔离，检索结果包含可核对出处。当前售后 Agent 与页面是后续阶段。
 
 ## 原研究助手的简历项目文本
 

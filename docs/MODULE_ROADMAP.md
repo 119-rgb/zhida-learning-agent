@@ -1,6 +1,6 @@
 # 知答分模块学习与实现路线
 
-目标是能独立解释和修改 Java 后端项目。售后平台模块 1 工单核心与模块 2 模拟订单已实现并通过隔离验收；原研究助手仍可单独学习。每个模块完成可运行结果和验证后再进入下一项，状态以 PROJECT_STATUS.md 和当前测试为准。
+目标是能独立解释和修改 Java 后端项目。售后平台模块 1 工单核心、模块 2 模拟订单与模块 3 售后知识库已实现并通过隔离验收；原研究助手仍可单独学习。每个模块完成可运行结果和验证后再进入下一项，状态以 PROJECT_STATUS.md 和当前测试为准。
 
 各阶段执行独立审查、修复复查与验证，记录在 [reviews](reviews/README.md)；模块 1 的核心与中文注释已完成独立审查。核心注释优先说明权限依据、状态合法性、事务边界、幂等和并发保证，避免逐行重复代码。
 
@@ -24,19 +24,30 @@
 
 完成标准：能解释为什么订单查询 SQL 必须带 user_id、为什么工单仍要再次校验订单归属、为什么 orderId 属于幂等摘要，以及 AI 工具将来只能调用查询方法。
 
+## 售后模块 3：公共与私人知识库（已实现、自动验证）
+
+入口：`KnowledgeBaseAccessService`、`KnowledgeController`、`KnowledgeBaseService`、`ResearchTools.knowledgeSearch`。
+
+学习：公共与私人资源授权、固定向量命名空间、PDF 按页解析、文本分块、异步索引、检索证据和资料不足降级。
+
+范围：公共库固定为 `product-support`，所有正式账号可读取，只有数据库 ADMIN 可上传、重试和删除；私人默认库和自建库仍按 JWT owner 隔离，管理员不具备越权读取能力。检索结果用 `evidenceSufficient` 区分有无依据，命中片段带文件名、页码或片段编号；依据不足时返回 `nextAction` 引导手动建单。
+
+完成标准：能解释为什么公共库使用固定命名空间、为什么页面上的 writable 不能替代写接口二次校验、如何避免公共权限穿透私人文档，以及 RAG 为什么必须返回可核对出处并允许资料不足。
+
 后续售后模块依次为：
 
-1. 售后知识库与检索（RAG）。
-2. 售后 Agent 与人工客服协作边界。
-3. 用户、客服、管理员三端页面与演示环境。
+1. 售后 Agent 与人工客服协作边界。
+2. 用户、客服、管理员三端页面与演示环境。
 
 工单接口、独立表和虚构 HTTP 演示见 [SUPPORT_DATABASE.md](SUPPORT_DATABASE.md) 与 [SUPPORT_DEMO.md](SUPPORT_DEMO.md)。
 
-下一售后模块验收：RAG 阶段验证公共与私人文档边界、出处和检索不足；Agent 阶段验证草稿确认、失败降级及提示注入边界；页面阶段用完整虚构闭环做浏览器验收。上述均为计划。
+下一售后模块验收：Agent 阶段验证草稿确认、失败降级及提示注入边界；页面阶段用完整虚构闭环做浏览器验收。上述均为计划。
 
 模块 1 新增 17 项自动测试，全量 99 项（1 项真实 MySQL 跳过）。先阅读 SupportTicketServiceTest、SupportTicketHttpTest、SupportConfigurationTest，解释真实并发、快照读取与审计故障注入。
 
 模块 2 新增 9 项自动测试，全量 108 项（1 项真实 MySQL 跳过）。先阅读 ProductOrderServiceTest 与 SupportOrderHttpTest，解释 owner SQL、造单幂等、事务审计和只读订单边界；再读 SupportConfigurationTest 的旧表升级用例。
+
+模块 3 新增 5 项自动测试，全量 113 项（1 项真实 MySQL 跳过）。先阅读 SupportKnowledgeHttpTest，解释公共读/管理员写、私人 404、系统域哈希和旧命名空间碰撞回归；再读 KnowledgeBaseServiceTest 的依据不足与 PDF 出处断言。
 
 ## 原研究助手学习路线
 

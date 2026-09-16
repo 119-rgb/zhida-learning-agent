@@ -447,8 +447,15 @@ public class KnowledgeBaseService {
     }
     if (!hasReadyDocuments) {
       String message =
-          hasProcessingDocuments ? "文档仍在处理中，请稍后再试。" : "知识库中还没有可用文档，请先上传 PDF、TXT 或 Markdown 文件。";
-      return new KnowledgeSearchResponse(query, knowledgeBaseId, List.of(), message);
+          hasProcessingDocuments
+              ? "检索依据不足：文档仍在处理中，请稍后再试。"
+              : "检索依据不足：知识库中还没有可用文档。";
+      String nextAction =
+          hasProcessingDocuments
+              ? "请稍后重新检索；如问题紧急，可创建售后工单。"
+              : "请补充产品手册、开通说明或售后规则，或创建售后工单。";
+      return new KnowledgeSearchResponse(
+          query, knowledgeBaseId, List.of(), message, false, nextAction);
     }
 
     int topK =
@@ -464,8 +471,15 @@ public class KnowledgeBaseService {
                         document.getScore(),
                         document.getText()))
             .toList();
-    String message = results.isEmpty() ? "没有找到相关度足够高的文档片段。" : "已找到 " + results.size() + " 个相关片段。";
-    return new KnowledgeSearchResponse(query, knowledgeBaseId, results, message);
+    boolean sufficient = !results.isEmpty();
+    String message =
+        sufficient
+            ? "已找到 " + results.size() + " 个可核对的相关片段。"
+            : "检索依据不足：没有找到相关度足够高的文档片段。";
+    String nextAction =
+        sufficient ? null : "请补充订单现象和错误信息，或创建售后工单。";
+    return new KnowledgeSearchResponse(
+        query, knowledgeBaseId, results, message, sufficient, nextAction);
   }
 
   public String defaultKnowledgeBaseId() {

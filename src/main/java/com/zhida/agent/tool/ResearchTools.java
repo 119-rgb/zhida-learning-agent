@@ -44,7 +44,11 @@ public class ResearchTools {
     return webReader.read(url);
   }
 
-  @Tool(name = "knowledge_search", value = "检索用户已经上传的本地 PDF、TXT 或 Markdown 文档。回答与文档有关的问题时优先使用。")
+  @Tool(
+      name = "knowledge_search",
+      value =
+          "检索当前已授权的公共产品售后知识库或用户私人 PDF、TXT、Markdown 文档。"
+              + "结果包含文件名、页码或片段编号及证据充分性；回答售后资料问题时优先使用。")
   public KnowledgeSearchResponse searchKnowledge(
       @P(value = "要在文档中查找的问题或关键词") String query,
       @P(value = "返回片段数量，取值 1 到 8", required = false) Integer topK) {

@@ -74,6 +74,19 @@ class KnowledgeBaseServiceTest {
   }
 
   @Test
+  void insufficientEvidenceIsExplicitAndSuggestsManualTicketCreation() {
+    KnowledgeBaseService service = service(mock(LocalVectorKnowledgeIndex.class), new QueuedExecutor());
+
+    KnowledgeSearchResponse response =
+        service.search(KnowledgeBaseAccessService.PUBLIC_PRODUCT_KNOWLEDGE_BASE_ID, "付款后没有开通", 5);
+
+    assertThat(response.results()).isEmpty();
+    assertThat(response.evidenceSufficient()).isFalse();
+    assertThat(response.message()).contains("检索依据不足");
+    assertThat(response.nextAction()).contains("创建售后工单");
+  }
+
+  @Test
   void marksInterruptedProcessingAsFailedAfterRestart() throws Exception {
     LocalVectorKnowledgeIndex index = mock(LocalVectorKnowledgeIndex.class);
     KnowledgeBaseService first = service(index, new QueuedExecutor());
@@ -166,6 +179,8 @@ class KnowledgeBaseServiceTest {
 
     when(index.search("default", "ZHIDA-PDF-4729", 5)).thenReturn(List.of(matchingChunk));
     KnowledgeSearchResponse beforeRestart = service.search("default", "ZHIDA-PDF-4729", 5);
+    assertThat(beforeRestart.evidenceSufficient()).isTrue();
+    assertThat(beforeRestart.nextAction()).isNull();
     assertThat(beforeRestart.results())
         .singleElement()
         .satisfies(
