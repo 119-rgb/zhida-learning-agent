@@ -192,9 +192,11 @@ function sseEvent(type, data, sequence) {
     // 以下回放只覆盖“页面如何处理这些事件”（长草稿、结构化出处、依据不足提示）；
     // 后端是否真的发出事件由上面的 assertAssistantStreamContract 与 docs 里记录的真实模型验证负责。
     await user.page.route('**/api/v1/support/assistant/stream', async route => {
+      // 只回放页面真正消费的事件；不再注入已废弃的 tool.completed + resultPreview 摘要，
+      // 那会让脚本看起来在验证审计摘要，实际页面已改为消费结构化投影事件。
       const body = [
         sseEvent('answer.started', {}, 1),
-        sseEvent('tool.completed', { toolName: 'knowledge_search', resultPreview: '{截断审计摘要}' }, 2),
+        sseEvent('tool.completed', { toolName: 'knowledge_search' }, 2),
         sseEvent('support.knowledge.evidence', {
           evidenceSufficient: true,
           message: '命中 1 个片段',
@@ -202,7 +204,7 @@ function sseEvent(type, data, sequence) {
           sources: [{ filename: 'fictional-product-support.md', pageNumber: null, chunkIndex: 1, excerpt: '已付款但未开通时，请提交售后工单并关联订单。' }]
         }, 3),
         sseEvent('answer.delta', { content: '订单状态为已付款、未开通。依据如下，建议创建工单。' }, 4),
-        sseEvent('tool.completed', { toolName: 'support_ticket_draft', resultPreview: '{超过 800 字后会截断}' }, 5),
+        sseEvent('tool.completed', { toolName: 'support_ticket_draft' }, 5),
         sseEvent('support.ticket-draft.ready', { draft: {
           requestId: draftRequestId,
           title: '订单已付款但服务未开通',

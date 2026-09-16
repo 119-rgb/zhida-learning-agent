@@ -4,7 +4,8 @@
  * 设计要点：
  * 1. 身份完全来自服务端：前端只保存 JWT，角色由 /api/v1/support/me 返回；
  *    页面隐藏按钮只是体验优化，真正的权限判断仍在后端，被拒绝时按接口返回的状态码提示。
- * 2. 所有写操作都携带 expectedVersion：工单被其他人改动后，服务端返回 409，页面重新加载而不是盲目重试。
+ * 2. 对已存在工单的变更都携带 expectedVersion：工单被其他人改动后服务端返回 409，页面重新加载而不是盲目重试。
+ *    建单、分类维护和录入模拟订单是新增资源，没有版本字段，改用 requestId 幂等。
  * 3. 售后助手只产生「未确认草稿」：草稿必须由用户在本页明确确认，才会调用建单接口。
  *    提交前先用 /ticket-drafts/{requestId} 检查是否已经建单，避免重复。
  * 4. 工单详情的状态脊线把状态流转与审计事件放在同一条时间轴上，这是本页的主要视觉信息。
@@ -43,7 +44,11 @@ let me = null;
 let health = null;
 let categories = [];
 let currentTicketId = null;
-/** 渲染序号：dispatch 会因初始化与 hashchange 并发执行，只有最新一次可以写视图。 */
+/**
+ * 渲染序号：dispatch 会因初始化与 hashchange 并发执行，只有最新一次可以写视图。
+ * 注意这里不做「同 hash 去重」——POST 之后刷新当前页、按钮点击重载都依赖同 hash 重新渲染，
+ * 去重会把这类真实需求误判成重复触发。
+ */
 let dispatchToken = 0;
 let pendingDraft = null;
 let assistantConversationId = null;
@@ -245,7 +250,7 @@ function navItems() {
     if (me.role === 'ADMIN') {
         return [
             { group: '工作台', items: [['overview', '总览']] },
-            { group: '工单', items: [['assignment', '工单分配'], ['tickets', '全部我的工单']] },
+            { group: '工单', items: [['assignment', '工单分配'], ['tickets', '全部工单']] },
             { group: '配置', items: [['categories', '分类管理'], ['catalog', '产品与订单'], ['knowledge', '知识库']] }
         ];
     }
@@ -291,6 +296,13 @@ function currentTicketFromHash() {
 }
 
 function navigate(route, param) {
+    // 无权路由直接落到总览，避免先渲染「正在加载…」再被 dispatch 弹回。
+    // 注意：这里保持「改 hash 由 hashchange 触发渲染」的简单模型，不额外调用 dispatch，
+    // 也不替换地址栏方式，历史上此类改动（replace + 主动 dispatch）反而会减少导航历史条目。
+    if (route !== 'ticket' && route !== 'overview' && me && !routeAllowed(route)) {
+        route = 'overview';
+        param = undefined;
+    }
     const target = param ? `${route}/${encodeURIComponent(param)}` : route;
     if (window.location.hash === `#${target}`) {
         dispatch();
@@ -316,6 +328,7 @@ async function dispatch() {
     const route = currentRoute();
     const config = ROUTES[route];
     if (!routeAllowed(route)) {
+        // 无权路由：跳总览并结束本次渲染，重定向后的渲染由 hashchange 触发。
         navigate('overview');
         return;
     }
@@ -336,7 +349,12 @@ async function dispatch() {
         await config.render();
     } catch (error) {
         if (!isCurrentRender(renderSeq)) return;
-        if (error.status === 401) return;
+        // 401 表示会话已经失效，登录弹窗会盖住视图；但这里仍要清掉「正在加载…」，
+        // 否则用户关闭弹窗或弹窗未显示时会看到永久加载中的空白页。
+        if (error.status === 401) {
+            view.innerHTML = '<div class="view-inner"><div class="empty"><strong>登录状态已失效</strong>请重新登录后再继续。</div></div>';
+            return;
+        }
         view.innerHTML = `<div class="view-inner"><div class="empty"><strong>加载失败</strong>${escapeHtml(error.message)}</div></div>`;
     }
 }
@@ -349,12 +367,17 @@ function isCurrentRender(renderSeq = dispatchToken) {
     return renderSeq === dispatchToken && view.dataset.renderSeq === String(renderSeq);
 }
 
-/** 路由可见性只改善页面体验；即使直接调用接口，后端仍会按数据库角色重新授权。 */
+/**
+ * 路由可见性只改善页面体验；即使直接调用接口，后端仍会按数据库角色重新授权。
+ *
+ * <p>角色判断必须与 {@link navItems} 保持一致：两处都只把 USER 当作已知角色，
+ * 未知角色（例如后端将来新增角色）按最小可见性处理，不能在这里兜底成管理员路由。
+ */
 function routeAllowed(route) {
     if (route === 'ticket' || route === 'overview') return true;
-    if (me.role === 'USER') return ['assistant', 'orders', 'newTicket', 'tickets', 'knowledge'].includes(route);
+    if (me.role === 'ADMIN') return ['assignment', 'tickets', 'categories', 'catalog', 'knowledge'].includes(route);
     if (me.role === 'CUSTOMER_SERVICE') return ['pending', 'assigned'].includes(route);
-    return ['assignment', 'tickets', 'categories', 'catalog', 'knowledge'].includes(route);
+    return ['assistant', 'orders', 'newTicket', 'tickets', 'knowledge'].includes(route);
 }
 
 /** 导航计数只使用当前角色有权访问的接口；失败时静默返回空计数，不影响主视图。 */
@@ -615,7 +638,7 @@ async function renderTicketDetail() {
                 <aside class="spine">
                     <div class="panel">
                         <h3>处理进度</h3>
-                        <p class="panel-description">状态只会按箭头方向推进；关闭后不能再修改。</p>
+                        <p class="panel-description">状态按箭头方向推进，用户未解决时可以退回处理中；关闭后不能再修改。</p>
                         <ol class="spine-steps">${spineSteps(ticket.status)}</ol>
                     </div>
                     <div class="panel">
@@ -934,7 +957,7 @@ function handleSseBlock(block, answerNode, statusNode) {
     } else if (type === 'support.knowledge.evidence') {
         renderEvidence(answerNode, data);
     } else if (type === 'task.completed') {
-        statusNode.textContent = '回答完成。需要人工处理时，请确认下方草稿创建工单。';
+        statusNode.textContent = '回答完成。如果本次生成了待确认草稿，请在下方核对后创建工单；也可以随时手动建单。';
     } else if (type === 'task.failed') {
         statusNode.textContent = data.message || '本次回答失败，可以稍后重试或手动创建工单。';
         appendManualFallback(answerNode);
@@ -1029,6 +1052,14 @@ async function confirmDraft() {
             navigate('ticket', existing.id);
             if (pendingDraft === draft) pendingDraft = null;
             return;
+        }
+        // 204 才表示「尚未建单」，可以继续提交。其他状态（403 / 500 / 网络代理错误）不能当作
+        // 「不存在」处理，否则会在查询失败时贸然建单，把重复提交的风险重新引入。
+        if (existingResponse.status !== 204) {
+            throw new ApiError(
+                existingResponse.status,
+                await readError(existingResponse, `无法确认草稿状态（${existingResponse.status}），请稍后重试。`)
+            );
         }
         const ticket = await postJson('/api/v1/support/tickets', {
             requestId: draft.requestId,
@@ -1446,6 +1477,6 @@ el('draftCancel').addEventListener('click', () => { pendingDraft = null; closeDr
 el('openSidebar').addEventListener('click', () => shell.classList.add('nav-open'));
 el('closeSidebar').addEventListener('click', () => shell.classList.remove('nav-open'));
 el('sidebarOverlay').addEventListener('click', () => shell.classList.remove('nav-open'));
+// hash 变化时刷新视图。渲染序号会丢弃过期结果，所以这里无需额外去重。
 window.addEventListener('hashchange', () => { dispatch(); });
-
 start();

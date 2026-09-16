@@ -109,10 +109,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 /*
  * 宽弹窗用于展示工单草稿：问题描述最长可达 4000 字，内容会明显超过视口高度。
  * 仅限制宽度会让底部按钮落到视口之外，用户无法滚动到确认按钮，因此这里同时限制高度并允许
- * 弹窗内部纵向滚动。窄弹窗保持原有样式不变。
+ * 弹窗内部纵向滚动。先给不支持 dvh 的浏览器一行 vh 回退，再覆盖为 dvh（移动端地址栏更准确）。
+ * 窄弹窗保持原有样式不变。
  */
 .auth-dialog.wide {
     width: min(560px, 100%);
+    max-height: calc(100vh - 48px);
     max-height: calc(100dvh - 48px);
     overflow-y: auto;
 }
@@ -238,7 +240,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 }
 .icon-button:hover { background: var(--soft); }
 .icon-button svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
-.close-sidebar { display: none; }
+/* 菜单按钮只在窄屏显示；关闭导航按钮复用 .icon-button，没有单独的类名。 */
 .menu-button { display: none; }
 
 .account-card { margin: 0 4px 16px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 11px; background: #fff; }
@@ -295,7 +297,6 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 }
 .topbar-title strong { display: block; font-size: 15px; }
 .topbar-title span { display: block; color: var(--muted); font-size: 12px; }
-.topbar-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
 .view { flex: 1; min-height: 0; overflow-y: auto; padding: 22px 26px 40px; }
 .view.wide { padding: 0; }
 .view-inner { max-width: 1080px; margin: 0 auto; }
@@ -441,6 +442,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 
 .draft-body { margin-top: 14px; }
 .draft-grid { display: grid; gap: 10px; }
+/* 草稿里的问题描述可能是没有空格的长串，必须允许在任意位置换行，否则会撑破弹窗。 */
+.draft-grid dd { overflow-wrap: anywhere; word-break: break-word; }
 .draft-grid dt { color: var(--muted); font-size: 12px; }
 .draft-grid dd { margin: 2px 0 0; font-size: 13.5px; white-space: pre-wrap; }
 .draft-note { margin: 12px 0 0; padding: 10px 12px; border-radius: 9px; background: var(--st-pending-bg); color: #7a4a06; font-size: 12.5px; }
@@ -490,7 +493,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     .shell.nav-open .sidebar { transform: none; }
     .sidebar-overlay { display: block; position: fixed; inset: 0; z-index: 20; border: 0; background: rgba(28, 34, 46, .38); }
     .shell:not(.nav-open) .sidebar-overlay { display: none; }
-    .close-sidebar, .menu-button { display: grid; }
+    .menu-button { display: grid; }
     .topbar, .view, .chat-log, .chat-composer { padding-left: 16px; padding-right: 16px; }
     .auth-actions { grid-template-columns: 1fr; }
 }

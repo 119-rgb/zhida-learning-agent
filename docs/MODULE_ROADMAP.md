@@ -64,8 +64,9 @@
 
 后续工作：
 
-1. 模块 4 与模块 5 本轮改动的独立审查记录。
+1. 模块 4 与模块 5 本轮改动的独立审查记录已完成，见 [reviews/2026-09-17-module-5.md](reviews/2026-09-17-module-5.md)。
 2. 跨浏览器与移动端验收、页面用例纳入自动测试、知识库文档状态自动刷新。
+3. 页面遗留的已知限制：被拒路由重定向会在历史里留一条记录（尝试用 `location.replace` 修复会减少正常导航历史条目，已回退）；客服端没有知识库等入口。
 
 工单接口、独立表和虚构 HTTP 演示见 [SUPPORT_DATABASE.md](SUPPORT_DATABASE.md) 与 [SUPPORT_DEMO.md](SUPPORT_DEMO.md)。
 
