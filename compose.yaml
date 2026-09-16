@@ -2,7 +2,6 @@ services:
   mysql:
     image: mysql:8.0
     environment:
-      ZHIDA_SUPPORT_ENABLED: ${ZHIDA_SUPPORT_ENABLED:-false}
       MYSQL_DATABASE: zhida_agent
       MYSQL_USER: zhida
       MYSQL_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
@@ -21,6 +20,8 @@ services:
     environment:
       ZHIDA_AUTH_ENABLED: "true"
       ZHIDA_PERSISTENCE_ENABLED: "true"
+      # 售后接口属于应用配置，必须传给 app 容器；放在 MySQL 容器中不会生效。
+      ZHIDA_SUPPORT_ENABLED: ${ZHIDA_SUPPORT_ENABLED:-false}
       ZHIDA_JWT_SECRET: ${ZHIDA_JWT_SECRET:?Set a random secret of at least 32 bytes}
       ZHIDA_AI_ENABLED: ${ZHIDA_AI_ENABLED:-false}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
