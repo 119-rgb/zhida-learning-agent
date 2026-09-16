@@ -22,12 +22,13 @@ public class SupportTicketController {
     this.actors = actors;
   }
 
-  // 不定义 userId/owner/role 字段：请求只能描述问题，不能决定工单属于谁或操作者权限。
+  // 不定义 userId/owner/role 字段；orderId 只是待校验资源，不能决定工单 owner 或操作者权限。
   public record CreateRequest(
       @NotBlank @Size(max = 64) String requestId,
       @NotBlank @Size(max = 120) String title,
       @NotBlank @Size(max = 4000) String description,
       @NotBlank @Size(max = 36) String categoryId,
+      @Size(max = 36) String orderId,
       @NotNull @AssertTrue Boolean confirmed) {}
 
   // 客户端读取工单后提交当时的版本；版本已变化时后端拒绝，客户端应刷新而非盲目重试。
@@ -74,7 +75,12 @@ public class SupportTicketController {
     return service.create(
         actors.resolve(p),
         new SupportTicketService.Create(
-            r.requestId(), r.title(), r.description(), r.categoryId(), r.confirmed()));
+            r.requestId(),
+            r.title(),
+            r.description(),
+            r.categoryId(),
+            r.orderId(),
+            r.confirmed()));
   }
 
   @GetMapping("/tickets")

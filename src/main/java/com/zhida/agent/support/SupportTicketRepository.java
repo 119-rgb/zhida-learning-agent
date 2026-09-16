@@ -25,6 +25,7 @@ public class SupportTicketRepository {
       String title,
       String description,
       String categoryId,
+      String orderId,
       Status status,
       String assignedTo,
       String solution,
@@ -88,6 +89,7 @@ public class SupportTicketRepository {
               r.getString("title"),
               r.getString("description"),
               r.getString("category_id"),
+              r.getString("order_id"),
               Status.valueOf(r.getString("status")),
               r.getString("assigned_to"),
               r.getString("solution"),
@@ -148,8 +150,8 @@ public class SupportTicketRepository {
   void insert(Ticket t) {
     jdbc.update(
         """
-INSERT INTO support_ticket(id,user_id,request_id,request_hash,title,description,category_id,status,version,created_at,updated_at)
-VALUES (?,?,?,?,?,?,?,?,?,?,?)
+INSERT INTO support_ticket(id,user_id,request_id,request_hash,title,description,category_id,order_id,status,version,created_at,updated_at)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
 """,
         t.id(),
         t.userId(),
@@ -158,6 +160,7 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?)
         t.title(),
         t.description(),
         t.categoryId(),
+        t.orderId(),
         t.status().name(),
         t.version(),
         Timestamp.from(t.createdAt()),

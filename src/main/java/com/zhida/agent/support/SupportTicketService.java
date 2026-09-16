@@ -20,14 +20,34 @@ import org.springframework.web.server.ResponseStatusException;
 public class SupportTicketService {
   private final SupportTicketRepository repository;
   private final SupportActorResolver actors;
+  private final ProductOrderService productOrders;
 
-  public SupportTicketService(SupportTicketRepository repository, SupportActorResolver actors) {
+  public SupportTicketService(
+      SupportTicketRepository repository,
+      SupportActorResolver actors,
+      ProductOrderService productOrders) {
     this.repository = repository;
     this.actors = actors;
+    this.productOrders = productOrders;
   }
 
   public record Create(
-      String requestId, String title, String description, String categoryId, Boolean confirmed) {}
+      String requestId,
+      String title,
+      String description,
+      String categoryId,
+      String orderId,
+      Boolean confirmed) {
+    // 保留模块 1 的无订单调用方式，旧客户端升级后仍可手动创建不关联订单的工单。
+    public Create(
+        String requestId,
+        String title,
+        String description,
+        String categoryId,
+        Boolean confirmed) {
+      this(requestId, title, description, categoryId, null, confirmed);
+    }
+  }
 
   private Actor refresh(Actor supplied) {
     // Actor 中的 role 不作为授权依据；重新查库，防止伪造角色或继续使用已经撤销的角色。
@@ -108,7 +128,12 @@ VALUES (?,?,?,?,?,?,?,?,?)
     String title = text(request.title(), 120, "标题");
     String description = text(request.description(), 4000, "问题描述");
     String category = text(request.categoryId(), 36, "分类");
-    String hash = hash(title, description, category);
+    String orderId =
+        request.orderId() == null || request.orderId().isBlank()
+            ? null
+            : text(request.orderId(), 36, "订单");
+    // 关联订单属于工单内容的一部分；同一 requestId 不能在重试时悄悄换成另一张订单。
+    String hash = hash(title, description, category, orderId == null ? "" : orderId);
     // 先查用于快速重放；最终防重复仍依靠数据库 (user_id, request_id) 唯一约束。
     // 在检查分类启用前重放，使已经创建的请求不会因分类后来停用而失去幂等性。
     var existing = repository.byRequest(actor.id(), key);
@@ -121,6 +146,7 @@ VALUES (?,?,?,?,?,?,?,?,?)
                     .category(category, true)
                     .orElseThrow(() -> error(HttpStatus.BAD_REQUEST, "分类不存在"));
             if (!chosen.enabled()) throw error(HttpStatus.BAD_REQUEST, "分类已停用");
+            if (orderId != null) productOrders.ownedOrder(actor.id(), orderId);
             Instant now = Instant.now();
             Ticket ticket =
                 new Ticket(
@@ -131,6 +157,7 @@ VALUES (?,?,?,?,?,?,?,?,?)
                     title,
                     description,
                     category,
+                    orderId,
                     PENDING,
                     null,
                     null,

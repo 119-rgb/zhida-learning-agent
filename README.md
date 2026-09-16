@@ -1,12 +1,12 @@
 # 知答——智能售后工单平台
 
-知答面向虚构的软件订阅产品，按模块构建售后流程。**模块 1 的工单后端已实现并通过隔离自动验收**，仍兼容原研究助手。订单关联、售后 RAG、售后 Agent 和三端页面是后续模块，不能视为已完成。
+知答面向虚构的软件订阅产品，按模块构建售后流程。**模块 1 工单后端和模块 2 产品/模拟订单已实现并通过隔离自动验收**，仍兼容原研究助手。售后 RAG、售后 Agent 和三端页面是后续模块，不能视为已完成。
 
 本项目于 2026-09-15 迁移到 LangChain4j 与 Spring MVC，原有 Spring AI Alibaba / WebFlux / 本地 BGE ONNX 版本留在 Git 历史中。当前代码不需要部署本地推理模型。
 
 ## 架构
 
-工单业务不依赖模型：HTTP 请求 → JWT 验证 → SupportActorResolver 数据库角色 → SupportTicketService 权限、状态和参数校验 → 工单条件更新、回复、审计同事务 → MySQL（测试为隔离 H2）。详情使用独立的可重复读事务。
+售后核心业务不依赖模型：HTTP 请求 → JWT 验证 → SupportActorResolver 数据库角色 → ProductOrderService / SupportTicketService 权限、归属、状态和参数校验 → 模拟订单或工单/回复/审计同事务 → MySQL（测试为隔离 H2）。详情使用独立的可重复读事务。
 
 以下为兼容保留的研究助手链路，尚未改成售后 Agent：
 
@@ -40,6 +40,7 @@ LangChain4j StreamingChatModel ↔ 工具调用循环
 - 可选注册、登录、游客访问与 JWT 鉴权；会话、任务、记忆和文档按服务端 owner 隔离。
 - requestId 数据库幂等、会话并发限制、任务取消、总超时、工具预算、每日额度和请求限流。
 - 根据供应商 Token 用量估算 DeepSeek 费用上限；未知模型、缺失统计与调用时间明确标为不完整。
+- 售后模块提供明确标记为模拟数据的产品与订单，覆盖待付款、已付款未开通、已开通；本人订单查询和工单关联均在服务端校验 owner。
 
 ## 启动
 
@@ -86,11 +87,13 @@ MySQL 数据库 `zhida_agent` 需提前创建，应用账户需具备该库读�
 
 账户、游客额度和注销局限见 [AUTH_DESIGN.md](AUTH_DESIGN.md)。部署步骤和剩余验收见 [DEPLOYMENT.md](DEPLOYMENT.md)。
 
-## 售后工单核心（模块 1，开发中）
+## 售后工单与模拟订单（模块 1–2，已实现）
 
 工单模块仅在 `zhida.support.enabled=true`、`ZHIDA_AUTH_ENABLED=true` 和 `ZHIDA_PERSISTENCE_ENABLED=true` 同时启用时运行；它要求 JWT 身份和数据库持久化，不能使用旧研究助手的游客或本地身份。注册账户默认只有 `USER` 角色；`CUSTOMER_SERVICE` 与 `ADMIN` 由数据库运维人员显式配置，服务端从数据库读取角色，接口不接受客户端提交的角色或工单所有者。
 
-模块 1 的工单创建仅包含 `title`、`description`、`categoryId` 和确认字段；没有订单关联。状态流转为 `PENDING`、`PROCESSING`、`AWAITING_CONFIRMATION`、`CLOSED`。用户创建和查看自己的工单、补充说明、确认并评价；客服查看待受理队列或自己的工单、接单、回复和提交方案；管理员管理分类、分配客服并查看全部工单。
+模块 2 增加虚构产品和模拟订单。管理员可录入产品及三种合法订单场景：`PENDING_PAYMENT + NOT_ACTIVATED`、`PAID + NOT_ACTIVATED`、`PAID + ACTIVATED`；产品和订单响应都带 `simulated=true`。普通用户只能通过固定 owner 条件查询自己的订单。HTTP 与业务服务都没有付款、退款或服务开通状态修改入口，后续 AI 工具只复用查询方法。
+
+工单状态流转为 `PENDING`、`PROCESSING`、`AWAITING_CONFIRMATION`、`CLOSED`。用户创建和查看自己的工单、补充说明、确认并评价；客服查看待受理队列或自己的工单、接单、回复和提交方案；管理员管理分类、分配客服并查看全部工单。创建可选关联 `orderId`，后端在创建事务内确认订单归当前 JWT 用户所有；`orderId` 同时进入 requestId 的幂等摘要。
 
 服务端接口位于 `/api/v1/support`：`GET /me`、分类 `GET/POST /categories` 与 `PUT /categories/{id}`、工单 `POST/GET /tickets`、详情 `GET /tickets/{id}`，以及 `comments`、`claim`、`replies`、`solution`、`confirm`、`reopen`、`assign` 等变更操作。`GET /tickets?view=mine` 是默认用户本人或客服本人列表，`view=pending` 是客服队列，`view=all` 仅管理员可用。详情返回 `ticket`、`replies`、`events`。创建需要 `confirmed=true`；所有变更请求都需要 `expectedVersion`，用来拒绝并发冲突。用户的 `requestId` 具有幂等语义：同一规范化内容重放返回原工单（201），同一标识但内容不同返回 409。
 
@@ -117,6 +120,9 @@ MySQL 数据库 `zhida_agent` 需提前创建，应用账户需具备该库读�
 | GET /api/v1/knowledge-bases/{id}/search?q=问题&topK=5 | 独立向量检索 |
 | GET /api/v1/support/me | 当前 JWT 对应的售后角色 |
 | GET/POST /api/v1/support/categories；PUT /categories/{id} | 分类读取与管理员管理 |
+| GET/POST /api/v1/support/products | 产品读取与管理员录入虚构产品 |
+| GET /api/v1/support/orders；GET /orders/{id} | 普通用户查询自己的模拟订单 |
+| POST /api/v1/support/admin/orders | 管理员幂等录入模拟订单；不连接真实支付 |
 | POST/GET /api/v1/support/tickets | 创建和按 `view` 查询工单 |
 | GET /api/v1/support/tickets/{id} | 工单、回复和审计事件的一致快照 |
 | POST /api/v1/support/tickets/{id}/comments、claim、replies、solution、reopen、confirm、assign | 对应用户、客服、管理员操作；必需 expectedVersion |
@@ -129,7 +135,7 @@ SSE 事件包括 task.started、plan.created、step.started、answer.started、t
 
 ## 测试与交付
 
-模块 1 全量回归：99 项、0 失败、0 错误、1 项真实 MySQL 测试跳过；新增工单测试 17 项，可执行 JAR 已打包。旧演示占用 target JAR 时可使用独立目录：`mvn clean verify '-Dzhida.build.directory=tmp/support-build'`。日志、构建产物和私人文件不入 Git。
+模块 2 全量回归：108 项、0 失败、0 错误、1 项真实 MySQL 测试跳过；模块 2 新增 9 项，可执行 JAR 已打包。旧演示占用 target JAR 时可使用独立目录：`mvn clean verify '-Dzhida.build.directory=tmp/module2-build'`。日志、构建产物和私人文件不入 Git。
 
 ```powershell
 mvn clean test
@@ -142,7 +148,7 @@ mvn package
 
 简历项目说明及源码面试地图见 [docs/RESUME_PROJECT.md](docs/RESUME_PROJECT.md)。完整开发要求见 [DEVELOPMENT_SPEC.md](DEVELOPMENT_SPEC.md)。
 
-分阶段独立审查与修复记录见 [docs/reviews](docs/reviews/README.md)，模块 1 已完成核心审查、修复复查以及中文注释审查。核心注释可从 support/SupportTicketService 和 SupportTicketRepository 开始阅读。
+分阶段独立审查与修复记录见 [docs/reviews](docs/reviews/README.md)，模块 1–2 均已完成独立审查和修复复查。工单注释可从 SupportTicketService 开始，订单边界从 ProductOrderService 与 ProductOrderRepository 开始。
 
 ## 来源
 

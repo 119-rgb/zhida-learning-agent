@@ -42,7 +42,7 @@ class SupportTicketServiceTest {
         new SupportTicketRepository(
             jdbc, new TransactionTemplate(new DataSourceTransactionManager(source)));
     var actors = new SupportActorResolver(jdbc);
-    service = new SupportTicketService(repository, actors);
+    service = ticketService(repository, actors);
     user = account("fixture_user", SupportRole.USER, actors);
     other = account("fixture_other", SupportRole.USER, actors);
     agent = account("fixture_agent", SupportRole.CUSTOMER_SERVICE, actors);
@@ -179,7 +179,7 @@ class SupportTicketServiceTest {
             return result;
           }
         };
-    var isolated = new SupportTicketService(repository, new SupportActorResolver(jdbc));
+    var isolated = ticketService(repository, new SupportActorResolver(jdbc));
     var results = race(() -> isolated.claim(agent, id, 0L), () -> isolated.claim(second, id, 0L));
     assertThat(results.stream().filter(r -> r instanceof SupportTicketRepository.Ticket).count())
         .isEqualTo(1);
@@ -329,11 +329,10 @@ class SupportTicketServiceTest {
             return rows;
           }
         };
-    var snapshotService =
-        new SupportTicketService(
-            new SupportTicketRepository(
-                paused, new TransactionTemplate(new DataSourceTransactionManager(source))),
-            new SupportActorResolver(paused));
+    var snapshotRepository =
+        new SupportTicketRepository(
+            paused, new TransactionTemplate(new DataSourceTransactionManager(source)));
+    var snapshotService = ticketService(snapshotRepository, new SupportActorResolver(paused));
     var worker = Executors.newSingleThreadExecutor();
     try {
       var future = worker.submit(() -> snapshotService.detail(user, id));
@@ -355,5 +354,13 @@ class SupportTicketServiceTest {
         .isInstanceOfSatisfying(
             ResponseStatusException.class,
             e -> assertThat(e.getStatusCode().value()).isEqualTo(status));
+  }
+
+  /** 单元测试与生产配置使用相同的订单归属服务，避免工单测试绕过模块 2 的校验路径。 */
+  SupportTicketService ticketService(
+      SupportTicketRepository tickets, SupportActorResolver actorResolver) {
+    var orders = new ProductOrderRepository(tickets.jdbc(), tickets.transaction());
+    return new SupportTicketService(
+        tickets, actorResolver, new ProductOrderService(orders, actorResolver));
   }
 }
