@@ -34,6 +34,45 @@ INSERT INTO support_account_role(user_id, role)
 SELECT id, 'CUSTOMER_SERVICE' FROM user_account WHERE username IN ('zhida_agent_1', 'zhida_agent_2');
 ```
 
+### 可选：用演示数据开关一键准备（推荐用于可重复演示）
+
+也可以让应用自己准备一套固定的虚构演示数据，避免手工建账号和造单。它默认关闭，必须同时打开两个开关并提供临时密码：
+
+```powershell
+$env:ZHIDA_SUPPORT_ENABLED="true"
+$env:ZHIDA_SUPPORT_DEMO_DATA_ENABLED="true"
+$env:ZHIDA_SUPPORT_DEMO_DATA_PASSWORD="<8 到 64 位的临时演示密码>"
+```
+
+启动后会幂等创建三个虚构账号（`zhida_demo_user` / `zhida_demo_agent` / `zhida_demo_admin`）、一个分类 `虚构订阅开通问题`、一个产品 `DEMO-SUB-PRO` 和一张「已付款未开通」订单；重复启动不会重复创建。
+
+两条安全约束（行为已实现，负向用例的覆盖情况见下）：
+
+- 密码只从环境变量读取，长度不合法会直接启动失败，不会写入任何文件或日志。
+- 如果库中已存在同名但**非本配置创建**的账号，或演示账号的角色被手工改过，应用会停止启动并提示改用独立演示数据库；它不会接管、改名或提权已有账号。
+
+对应自动测试：`SupportDemoDataConfigurationTest` 覆盖正常初始化与重复执行幂等，并覆盖密码不合法、同名非演示账号、演示账号 ID 被占用、演示账号角色被改这四条安全停止分支；停止时都会断言已有账号与角色记录未被修改。
+
+> 属性名是 `zhida.support.demo-data.password`（环境变量 `ZHIDA_SUPPORT_DEMO_DATA_PASSWORD`）。
+> 写成 `ZHIDA_SUPPORT_DEMO_PASSWORD` 不会被识别，应用会因密码校验失败而拒绝启动。
+
+## 二之二、浏览器自动验收
+
+`scripts/verify-support-workbench.cjs` 用 Playwright 对一个显式启用 demo-data 的隔离实例跑完整闭环（用户订单 → 结构化出处 → 长草稿确认 → 客服接单/回复/方案 → 用户退回 → 客服再方案 → 用户关闭评价 → 手动建单 → 管理端公共知识库）。
+
+```powershell
+$env:ZHIDA_BROWSER_BASE_URL="http://127.0.0.1:18080"
+$env:ZHIDA_SUPPORT_DEMO_PASSWORD="<与 demo-data 相同的临时密码>"
+$env:PLAYWRIGHT_MODULE_PATH="<本机 playwright 包路径>"
+node scripts/verify-support-workbench.cjs
+```
+
+- 脚本不写截图、Token、密码或日志文件，只把断言结果打到标准输出；`PLAYWRIGHT_MODULE_PATH` 是本机绝对路径，只用于运行，不写入仓库。
+- 助手回答使用脚本内构造的 SSE 事件回放，不调用真实模型；因此它验证的**页面**如何处理出处卡片、依据不足提示和长草稿。回放不能证明后端仍会发出这些事件，所以脚本另外用 `assertAssistantStreamContract` 直接请求真实接口校验 SSE 事件契约（Demo 模式无需模型）。
+- 脚本用「后端真实状态」判定状态流转（轮询详情接口），而不是靠页面文案，避免把历史事件里的文字误当成当前状态。
+- 打开工单详情必须用整页重载：`page.goto()` 到只差 hash 的同文档 URL 不会重新加载文档，SPA 不会重新初始化，页面会停留在上一次（可能过期）的渲染结果。
+- 详情操作走 `actOnTicket`：先确认后端状态，再打开详情并重试按钮，避免把偶发的渲染抖动误报成功能缺陷。
+
 ## 三、演示步骤（约 5 分钟）
 
 ### 1. 管理员准备演示数据
@@ -114,3 +153,14 @@ v6 CONFIRM  用户 → 已关闭
 - 知识库上传后的解析、分块和向量化是异步的；未配置 Embedding 服务时文档会停留或失败，检索会明确返回「依据不足」。
 - 售后助手目前只面向当前账号自己的订单与工单；客服和管理员的 AI 辅助尚未实现。
 - 页面隐藏按钮只是体验优化，**权限判断始终在服务端**；接口被直接调用时同样会被拒绝。
+- 浏览器验收目前只用 Chromium；跨浏览器与移动端未验收。页面用例也还没有纳入 `mvn test`。
+
+## 六、本轮修复的页面缺陷（2026-09-17）
+
+| 缺陷 | 现象 | 修复 |
+| --- | --- | --- |
+| 长草稿弹窗无法确认 | 问题描述接近 4000 字时，确认按钮被挤出视口且弹窗不能滚动，用户点不到「确认创建工单」 | `.auth-dialog.wide` 增加 `max-height: calc(100dvh - 48px)` 与 `overflow-y: auto`，弹窗内部可滚动 |
+| 详情渲染过期状态 | 页面初始化与 hash 跳转会并发调用 `dispatch()`，较早发起的那次可能后返回并覆盖新页面，导致详情显示旧状态（例如仍显示「待受理」） | `dispatch()` 增加渲染序号 `dispatchToken`，只有最新一次允许写视图；过期结果直接丢弃 |
+| 浏览器脚本误判 | 脚本用页面文字（`getByText('待用户确认')`）判定状态流转，可能匹配到历史事件文字而误判通过；`page.goto()` 到同文档 hash 不重载 | 状态断言改为轮询后端详情接口；打开详情改用整页 `reload`；操作按钮改为显式等待可交互并输出面板内容便于定位 |
+| 后端事件无覆盖 | 页面用例回放自造 SSE，后端即使不再发出 `support.ticket-draft.ready` 也照样通过 | 增加 `assertAssistantStreamContract`：直接请求售后助手接口（Demo 模式不调模型），断言响应是合法 SSE 且事件序列完整 |
+| 渲染抖动误报 | 偶发页面渲染未完成时单次等待超时，但后端状态其实已正确 | `actOnTicket` 先确认后端状态，再打开详情重试若干次；重试前重新确认状态，避免掩盖真实冲突 |

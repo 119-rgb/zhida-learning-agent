@@ -22,7 +22,7 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 
 /**
- * 模块 4 的 HTTP 边界：售后助手入口只接受正式账号，且 Demo 模式（未开启真实模型）也能完成一次
+ * 模块 4 的 HTTP 边界：售后助手入口只接受普通用户账号，且 Demo 模式（未开启真实模型）也能完成一次
  * 会话而不会创建工单。真实模型、真实 SSE 浏览器行为在其它验收记录中单独标注。
  */
 @SpringBootTest(
@@ -65,12 +65,18 @@ class SupportAssistantHttpTest {
   }
 
   String user;
+  String agent;
+  String admin;
   JdbcTemplate jdbc;
 
   @BeforeAll
   void accounts() {
     jdbc = new JdbcTemplate(source);
     user = register("assistant_fixture_user");
+    agent = register("assistant_fixture_agent");
+    admin = register("assistant_fixture_admin");
+    setRole("assistant_fixture_agent", "CUSTOMER_SERVICE");
+    setRole("assistant_fixture_admin", "ADMIN");
   }
 
   @Test
@@ -107,6 +113,17 @@ class SupportAssistantHttpTest {
     assertThat(ticketCount()).isEqualTo(before);
   }
 
+  @Test
+  void supportAssistantDefaultsToPublicKnowledgeAndRejectsStaffRoles() {
+    assertThat(
+            SupportAssistantController.supportRequest(
+                    new com.zhida.agent.api.dto.ResearchRequest("conversation", "开通失败"))
+                .knowledgeBaseId())
+        .isEqualTo("product-support");
+    assertThat(stream(agent).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+    assertThat(stream(admin).getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+  }
+
   private ResponseEntity<String> stream(String token) {
     HttpHeaders headers = new HttpHeaders();
     headers.setContentType(MediaType.APPLICATION_JSON);
@@ -130,5 +147,12 @@ class SupportAssistantHttpTest {
             Map.class);
     assertThat(result.getStatusCode().value()).isEqualTo(200);
     return (String) result.getBody().get("accessToken");
+  }
+
+  private void setRole(String username, String role) {
+    String id =
+        jdbc.queryForObject("SELECT id FROM user_account WHERE username=?", String.class, username);
+    jdbc.update(
+        "MERGE INTO support_account_role(user_id,role) KEY(user_id) VALUES (?,?)", id, role);
   }
 }

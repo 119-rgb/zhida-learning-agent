@@ -13,12 +13,14 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.MediaType;
+import org.springframework.http.HttpStatus;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import org.springframework.web.server.ResponseStatusException;
 
 /**
  * 售后助手入口。它复用研究助手已经验证过的 SSE、任务持久化、取消、超时和工具预算能力，
@@ -69,15 +71,29 @@ public class SupportAssistantController {
     // 未登录在这里被拒绝；认证上下文是唯一的身份来源。
     String owner = owners.owner(principal);
     // 售后助手只对正式账号开放：游客即使持有有效 JWT 也不能进入售后业务。
-    actors.account(owner);
+    SupportActorResolver.Actor actor = actors.account(owner);
+    if (actor.role() != SupportRole.USER) {
+      throw new ResponseStatusException(HttpStatus.FORBIDDEN, "售后助手仅供普通用户查询本人业务");
+    }
+    ResearchRequest supportRequest = supportRequest(request);
     // 先解析知识库授权，未授权命名空间在进入模型之前失败，避免模型影响授权判断。
-    knowledgeBaseAccess.resolve(owner, request.knowledgeBaseId());
+    knowledgeBaseAccess.resolve(owner, supportRequest.knowledgeBaseId());
     ConversationHistory persistence = history.getIfAvailable();
     ResearchSession session =
         persistence == null
-            ? orchestrator.prepare(request, owner, AgentMode.SUPPORT)
-            : persistence.prepare(request, orchestrator, owner, AgentMode.SUPPORT);
+            ? orchestrator.prepare(supportRequest, owner, AgentMode.SUPPORT)
+            : persistence.prepare(supportRequest, orchestrator, owner, AgentMode.SUPPORT);
     // 与研究助手共用同一套 SSE、取消、超时和队列保护实现。
     return ResearchSseStreamer.stream(session, executor, timeoutSeconds);
+  }
+
+  /** 未显式选择私人资料时固定检索公共产品售后库，避免沿用研究助手的私人 default 默认值。 */
+  static ResearchRequest supportRequest(ResearchRequest request) {
+    String knowledgeBaseId =
+        request.knowledgeBaseId() == null || request.knowledgeBaseId().isBlank()
+            ? KnowledgeBaseAccessService.PUBLIC_PRODUCT_KNOWLEDGE_BASE_ID
+            : request.knowledgeBaseId();
+    return new ResearchRequest(
+        request.conversationId(), request.message(), request.requestId(), knowledgeBaseId);
   }
 }

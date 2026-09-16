@@ -1,67 +1,51 @@
-# 接力交接单（Codex ↔ DSH）
+# 当前接力交接单（2026-09-17，DSH 接手后）
 
-两个 agent 不共享上下文，唯一的协作介质是仓库：受版本控制的文件加 git。
-本文件记录**当前位置**，每次交接整份覆盖，不追加历史。
+本文件只记录当前可复现状态。以工作区文件与重新执行的测试为准，不根据旧聊天或旧阶段结论猜测。
 
-## 与其它文档的分工
+## 接力状态
 
-| 文件 | 性质 | 写什么 |
-| --- | --- | --- |
-| `docs/HANDOFF.md`（本文件） | 可变，每次覆盖 | 现在谁持有接力棒、下一步做什么、交给谁 |
-| `docs/PROJECT_STATUS.md` | 只增不改 | 事实存档：实际验证到什么程度、哪些尚未验收 |
-| `docs/reviews/` | 追加 | 分阶段独立审查记录 |
+- 当前分支：`codex/after-sales-tickets`。已提交：`0b383e1`（模块 4）→ `a09c939`（模块 5 页面）→ `113974b`（模块 5 文档）。
+- 工作区改动（模块 4 审查修复 + 模块 5 收尾 + 本轮审查修复）已由 DSH 提交并推送，见本轮提交。
+- 未重写历史、未 force push、未推送 `archive/*`。
 
-同一件事不要写进两处。
+## 本轮做完的事（按顺序）
 
-## 核心规则
+1. **修掉长草稿无法确认**：`support.css` 的 `.auth-dialog.wide` 只有宽度限制，描述接近 4000 字时确认按钮落在视口外且弹窗不可滚动。加 `max-height: calc(100dvh - 48px)` + `overflow-y: auto`。
+2. **定位并修复「详情渲染过期状态」**：`start()` 与 `hashchange` 并发调用 `dispatch()`，先发起后返回的那次用过期数据覆盖新渲染，表现为工单已到「待用户确认」页面仍显示「待受理」、操作按钮只剩「补充说明」，用户无法确认或退回。
+3. **加固渲染竞态防护**：审查指出原先只在 `loadCounts()` 后复检序号，各 `render*` 在自己 await 之后写 `innerHTML` 仍会覆盖。现在视图根元素记录渲染序号，所有 await 后的写入都过 `isCurrentRender()`。
+4. **修掉功能回归**：售后助手「手动建单」按钮原先放在 `#assistantStatus` 内，而该节点用 `textContent` 更新，发送第一条消息后按钮即被删除。已拆成独立 span；脚本改为发送后再次断言。
+5. **修掉脚本自身的坑**：① 用页面文案判定状态会匹配历史事件（功能坏了也判通过）→ 改为轮询后端状态；② `page.goto()` 到只差 hash 的同文档 URL 不重载 → 改整页 `reload`；③ 密码环境变量名与实际属性不一致 → 统一为 `ZHIDA_SUPPORT_DEMO_DATA_PASSWORD`；④ 回放自造 SSE 无法覆盖后端投影 → 增加真实接口 SSE 契约探针；⑤ 偶发渲染抖动 → `actOnTicket` 先确认后端状态再重试按钮。
+6. **后端健壮性**：`emitSupportUiResult` 同时捕获 `JsonProcessingException` 与 `RuntimeException`（仅记录工具名与异常类型），补测试证明投影失败时任务仍完成；演示数据角色检查改为任一角色行不符即停止，并补 3 条安全停止负向用例；`pendingDraft` 改为快照使用并在登出时清空。
 
-1. **写的人不自审。** 谁实现的代码，谁不担任该范围的独立审查。
-2. **同一时间只有一个 agent 写工作区。** 非持有者只读。
-3. 交接必须留下**可复现的验收命令**，不接受"我看过了"。
-4. 验证记录必须区分「实际执行」与「未执行」，不把计划写成已完成。
-5. 提交身份用昵称加 GitHub noreply；**任何推送前先过发布隐私门**。处理及远端核验结果见 `docs/PRIVACY_REVIEW.md`。
-6. 不推送 `archive/*` 分支。
+## 已执行验收（本轮实际执行）
 
-## 接力循环
+- `mvn -o clean verify '-Dzhida.build.directory=tmp/dsh-module5-final2'`：**133 项、0 失败、0 错误、1 项真实 MySQL 测试跳过**，可执行 JAR 生成成功。
+- `node scripts/verify-support-workbench.cjs`：**PASS，修复审查意见后连续多次通过**。
+- `node --check`：`app.js`、`support.js`、`scripts/verify-support-workbench.cjs` 全部通过；`git diff --check` 无空白错误。
+- 隐私：待推送文件与 3 条远端分支的全部可达提交、文件对象均无命中；提交身份为已核实的 noreply。
+- 隔离实例启动参数（实测可用）：`ZHIDA_SUPPORT_ENABLED=true`、`ZHIDA_SUPPORT_DEMO_DATA_ENABLED=true`、`ZHIDA_SUPPORT_DEMO_DATA_PASSWORD=<临时值>`、`ZHIDA_AUTH_ENABLED=true`、`ZHIDA_PERSISTENCE_ENABLED=true`、`DB_URL=jdbc:h2:mem:<名>;MODE=MySQL;DB_CLOSE_DELAY=-1`、`DB_USERNAME=sa`、空 `DB_PASSWORD`、`ZHIDA_AI_ENABLED=false`，端口 `18080`；用 `-cp "target/classes;<dependency classpath>"` 启动 `com.zhida.agent.ZhidaAgentApplication`（H2 在 test scope，可执行包不含 H2）。
 
-```text
-A 计划 → A 实施+自测 → B 独立审查+复核 → A 修复 → B 复查 → 记录 → 换棒
-```
+## 未执行验收
 
-角色不固定，按模块轮换，只要满足规则 1。候选分工：
+- 真实 MySQL 上的**页面**闭环、真实模型驱动的**页面**闭环（脚本用构造 SSE 事件）。
+- 跨浏览器（Firefox/Safari）、移动端真机、无障碍审计、Docker。
+- 页面用例纳入 `mvn test`。
 
-| 模块 | 实施 | 独立审查 |
-| --- | --- | --- |
-| 售后工单核心（已完成） | Codex | DSH |
-| 订单关联与归属校验（已完成） | Codex | 独立 review agent |
-| 售后知识库改造（已完成） | Codex | 独立 review agent |
-| 售后 Agent 与工具边界（已完成，待审查） | DSH | 待指派（不得由 DSH 自审） |
-| 三端页面与完整演示（已实现，浏览器验收） | DSH | 待指派 |
+## 独立审查状态
 
-## 当前状态
+- 模块 1–3：已完成独立审查与复查。
+- 模块 4：由未参与实现的审查者完成只读 review，问题已修复并复查。
+- 模块 5（含本轮的竞态、回归与脚本修复）：已完成独立审查与修复，记录见 `docs/reviews/2026-09-17-module-5.md`。审查遗留的 P3 清理项未处理，已在记录中列明。
 
-- **持有者**：`dsh`
-- **上一棒**：模块 1–4 已提交并推送；模块 5 页面已提交（`a09c939`），推送待执行。
-- **当前工作**：模块 5 三端页面已实现并用真实浏览器（Playwright + Chromium）验收；接下来是收尾、模块 4/5 独立审查与推送。
+## 下一位 Agent 的建议顺序
 
-## 交给下一位
+1. 读 `AGENTS.md`、本文件与 `docs/reviews/2026-09-17-module-5.md`，确认当前基线。
+2. 若继续开发：优先「真实模型下草稿入口更显式」与「知识库文档状态自动刷新」两项待办。
+3. 剩余 P3 清理（已废弃桩事件、被拒路由历史记录、无用样式与死节点、陈旧文案）可独立成一个小任务。
+4. 发布前仍按 AGENTS.md 过一遍隐私门；禁止推送 `archive/*`，禁止 force push。
 
-- 对象：独立审查 agent（模块 4 与模块 5 均不得由 DSH 自审）
-- 任务：
-  1. 独立审查模块 4：`SupportTools` 工具集是否真正只读、`SupportToolContext` 身份来源是否可被绕过、`SupportAssistantController` 是否可能被非正式账号调用、草稿与建单是否确实分离、`createdBy` 与新增 `accounts`/`allOrders` 的归属与角色校验、提示注入边界与失败降级。
-  2. 独立审查模块 5：页面是否存在越权路径（前端隐藏按钮是否被误当作权限）、草稿确认是否可被绕过、SSE 解析是否会漏事件或重复渲染、导航计数与列表是否使用了正确的 `view`。
-  3. 审查完成后由实施方修复，再复查并记录到 `docs/reviews/`。
-- 已执行验收：
-  - `mvn clean verify '-Dzhida.build.directory=tmp/module4-final-build'`：124 项、0 失败、0 错误、1 项真实 MySQL 测试跳过；可执行 JAR 生成成功。
-  - 真实 MySQL + JWT + 真实 DeepSeek：售后 Agent 会话调用 `support_orders`/`knowledge_search`/`support_ticket`，回答引用真实订单号并明确说明知识库无依据，全程未建单。
-  - 真实 MySQL HTTP 闭环：跨用户订单 404、用户 `view=pending/all` 403、游客 403、匿名 401、非法状态组合 400、并发接单一个成功、7 条审计事件与版本 0–6 一致。
-  - 页面：Playwright + Chromium headless 覆盖三种角色导航、工单列表、状态脊线、审计条数与游客拒绝，除游客场景预期 403 外无异常控制台报错。
-- 未执行验收：跨浏览器与移动端验收、页面用例纳入自动测试、真实 Embedding/Tavily、Docker。
+## 待办（非阻断）
 
-## 未决问题
-
-- 真实模型不主动调用 `support_ticket_draft`（已观察 4 轮会话），模块 5 因此需要显式入口引导；是否加强工具描述或指令引导待定。
-- 模块 2 旧库升级只在 H2 MySQL 模式验证，真实 MySQL 元数据/ALTER/外键/索引 DDL 仍待验收。
-- 传递依赖含 `langchain4j-reactive-streaming:1.20.0-beta30`，是否钉住待定。
-- 演示库中存在早期遗留的测试账号（非本次创建），演示前建议清理或改用独立数据库。
-- DSH 侧工作区默认文件策略会拒绝写操作，实施类任务需显式放宽文件权限。
+- 真实模型不主动调用草稿工具（实测 3 轮 10 次工具调用全为查询类），页面需要更显式的「生成工单草稿」入口。
+- 知识库文档状态缺少自动刷新，索引完成后需手动刷新页面。
+- 售后助手只覆盖本人订单与工单；客服/管理员的 AI 辅助未实现。

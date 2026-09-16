@@ -43,9 +43,12 @@ let me = null;
 let health = null;
 let categories = [];
 let currentTicketId = null;
+/** 渲染序号：dispatch 会因初始化与 hashchange 并发执行，只有最新一次可以写视图。 */
+let dispatchToken = 0;
 let pendingDraft = null;
 let assistantConversationId = null;
 let assistantBusy = false;
+let selectedKnowledgeBaseId = null;
 
 /* ---------------- 基础请求 ---------------- */
 
@@ -172,6 +175,9 @@ function signOut(message) {
     token = null;
     me = null;
     sessionStorage.removeItem(TOKEN_KEY);
+    // 登出必须清掉待确认草稿并关闭弹窗：草稿属于上一个账号，残留会让下一个登录者看到并确认它。
+    pendingDraft = null;
+    closeDraftModal();
     el('accountName').textContent = '未登录';
     el('accountRole').textContent = '—';
     el('accountHint').textContent = '登录后查看售后内容';
@@ -223,6 +229,8 @@ function renderAccount() {
 const ROUTES = {
     overview: { title: '售后工作台', subtitle: '从这里开始解决售后问题', render: renderOverview },
     assistant: { title: '售后助手', subtitle: '描述问题，助手查询订单与知识库后给出建议', render: renderAssistant, chat: true },
+    orders: { title: '我的订单', subtitle: '核对模拟订单的付款与服务开通状态', render: renderOrders },
+    newTicket: { title: '手动创建工单', subtitle: '模型不可用时也能直接提交售后问题', render: renderManualTicket },
     tickets: { title: '我的工单', subtitle: '查看和跟进你提交的售后问题', render: renderTicketList },
     ticket: { title: '工单详情', subtitle: '处理记录、回复与状态变更', render: renderTicketDetail },
     pending: { title: '待受理队列', subtitle: '尚未有人接单的工单', render: () => renderTicketList({ view: 'pending' }) },
@@ -248,7 +256,7 @@ function navItems() {
         ];
     }
     return [
-        { group: '解决问题', items: [['assistant', '售后助手'], ['tickets', '我的工单']] },
+        { group: '解决问题', items: [['assistant', '售后助手'], ['orders', '我的订单'], ['newTicket', '手动建单'], ['tickets', '我的工单']] },
         { group: '资料', items: [['knowledge', '我的资料']] }
     ];
 }
@@ -301,23 +309,52 @@ function markActiveNav(route) {
 
 async function dispatch() {
     if (!me) return;
+    // 每次渲染都取一个递增序号：页面初始化（start）和 hashchange 会并发调用 dispatch，
+    // 较早发起的那次可能后返回并覆盖新页面。只有最新一次允许写 DOM，避免显示过期工单状态。
+    // 需要与模块级 JWT 变量 token 区分，所以这里命名为 renderSeq。
+    const renderSeq = ++dispatchToken;
     const route = currentRoute();
     const config = ROUTES[route];
+    if (!routeAllowed(route)) {
+        navigate('overview');
+        return;
+    }
     currentTicketId = route === 'ticket' ? currentTicketFromHash() : null;
     el('viewTitle').textContent = config.title;
     el('viewSubtitle').textContent = config.subtitle;
     markActiveNav(route);
     view.className = config.chat ? 'view wide' : 'view';
+    // 在视图根元素上标记本次渲染序号；各 render* 内部 await 之后的写入都要重新确认序号，
+    // 否则「A 路由请求慢、B 路由已渲染完成」时会出现标题是 B、正文是 A 的混合页面。
+    view.dataset.renderSeq = String(renderSeq);
     view.innerHTML = '<p class="loading">正在加载…</p>';
     try {
         const counts = await loadCounts();
+        if (!isCurrentRender(renderSeq)) return;
         renderNav(counts);
         markActiveNav(route);
         await config.render();
     } catch (error) {
+        if (!isCurrentRender(renderSeq)) return;
         if (error.status === 401) return;
         view.innerHTML = `<div class="view-inner"><div class="empty"><strong>加载失败</strong>${escapeHtml(error.message)}</div></div>`;
     }
+}
+
+/**
+ * 视图写入守卫。不传参数时比较「当前渲染序号」与「视图根元素记录的序号」，供各 render* 在
+ * await 之后、写 innerHTML 之前调用；dispatch 内部则带上自己的序号做一次早退判断。
+ */
+function isCurrentRender(renderSeq = dispatchToken) {
+    return renderSeq === dispatchToken && view.dataset.renderSeq === String(renderSeq);
+}
+
+/** 路由可见性只改善页面体验；即使直接调用接口，后端仍会按数据库角色重新授权。 */
+function routeAllowed(route) {
+    if (route === 'ticket' || route === 'overview') return true;
+    if (me.role === 'USER') return ['assistant', 'orders', 'newTicket', 'tickets', 'knowledge'].includes(route);
+    if (me.role === 'CUSTOMER_SERVICE') return ['pending', 'assigned'].includes(route);
+    return ['assignment', 'tickets', 'categories', 'catalog', 'knowledge'].includes(route);
 }
 
 /** 导航计数只使用当前角色有权访问的接口；失败时静默返回空计数，不影响主视图。 */
@@ -385,6 +422,7 @@ async function renderOverview() {
         .map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${value}</dd></div>`)
         .join('');
 
+    if (!isCurrentRender()) return;
     view.innerHTML = `
         <div class="view-inner">
             <div class="section-head">
@@ -434,6 +472,7 @@ async function renderTicketList(options = {}) {
             ? ['还没有任何工单', '用户提交售后问题后会显示在这里。']
             : ['你还没有工单', me.role === 'USER' ? '可以在售后助手里描述问题，确认后创建工单。' : '接单后工单会出现在这里。'];
 
+    if (!isCurrentRender()) return;
     view.innerHTML = `
         <div class="view-inner">
             <div class="section-head">
@@ -454,6 +493,74 @@ async function renderTicketList(options = {}) {
     });
 }
 
+/* ---------------- 用户端：订单与手动建单 ---------------- */
+
+async function renderOrders() {
+    const orders = await getJson('/api/v1/support/orders');
+    if (!isCurrentRender()) return;
+    view.innerHTML = `
+        <div class="view-inner">
+            <div class="section-head"><div><h2>我的模拟订单</h2>
+                <p>这里只展示当前账号的虚构订单。AI 和页面都不能修改付款、退款或开通状态。</p></div>
+                <button class="button primary" type="button" data-go="assistant">咨询售后助手</button>
+            </div>
+            ${orders.length ? `<div class="ticket-list">${orders.map(order => `
+                <article class="ticket-row static-row">
+                    <span class="ticket-row-title">${escapeHtml(order.productName)}</span>
+                    <span class="ticket-row-side"><span class="status-tag ${order.serviceStatus === 'ACTIVATED' ? 'status-closed' : 'status-pending'}">${order.serviceStatus === 'ACTIVATED' ? '已开通' : '未开通'}</span></span>
+                    <span class="ticket-row-meta"><span class="mono">${escapeHtml(order.orderNo)}</span><span>${order.paymentStatus === 'PAID' ? '已付款' : '待付款'}</span><span>模拟数据</span></span>
+                </article>`).join('')}</div>`
+                : '<div class="empty"><strong>还没有模拟订单</strong>请让演示管理员准备虚构订单，或直接手动创建不关联订单的工单。</div>'}
+        </div>`;
+    view.querySelector('[data-go]').addEventListener('click', () => navigate('assistant'));
+}
+
+async function renderManualTicket() {
+    const [orders, enabledCategories] = await Promise.all([
+        getJson('/api/v1/support/orders'),
+        getJson('/api/v1/support/categories')
+    ]);
+    const requestId = crypto.randomUUID();
+    if (!isCurrentRender()) return;
+    view.innerHTML = `
+        <div class="view-inner narrow-content">
+            <div class="section-head"><div><h2>手动创建工单</h2>
+                <p>该流程不依赖大模型。点击确认后，服务端会再次校验分类、订单归属与 requestId。</p></div></div>
+            <div class="panel">
+                ${enabledCategories.length ? `<form id="manualTicketForm">
+                    <div class="field"><label class="field-label" for="manualTitle">标题</label><input id="manualTitle" maxlength="120" required placeholder="例如：订单已付款但服务未开通"></div>
+                    <div class="field"><label class="field-label" for="manualCategory">问题分类</label><select id="manualCategory" required>${enabledCategories.map(category => `<option value="${escapeHtml(category.id)}">${escapeHtml(category.name)}</option>`).join('')}</select></div>
+                    <div class="field"><label class="field-label" for="manualOrder">关联订单（可选）</label><select id="manualOrder"><option value="">不关联订单</option>${orders.map(order => `<option value="${escapeHtml(order.id)}">${escapeHtml(order.orderNo)} · ${escapeHtml(order.productName)} · ${order.paymentStatus === 'PAID' ? '已付款' : '待付款'} / ${order.serviceStatus === 'ACTIVATED' ? '已开通' : '未开通'}</option>`).join('')}</select></div>
+                    <div class="field"><label class="field-label" for="manualDescription">问题描述</label><textarea id="manualDescription" maxlength="4000" required placeholder="请描述现象、发生时间和已经尝试过的操作。"></textarea></div>
+                    <p class="panel-description">提交按钮代表你明确确认创建工单；重复点击会使用同一 requestId，不会重复建单。</p>
+                    <button class="button primary" type="submit">确认创建工单</button>
+                </form>` : '<div class="empty"><strong>暂时无法建单</strong>当前没有启用的售后分类，请联系演示管理员先创建分类。</div>'}
+            </div>
+        </div>`;
+    const form = el('manualTicketForm');
+    if (!form) return;
+    form.addEventListener('submit', async event => {
+        event.preventDefault();
+        const button = event.submitter;
+        setBusy(button, true, '正在创建…');
+        try {
+            const ticket = await postJson('/api/v1/support/tickets', {
+                requestId,
+                title: el('manualTitle').value.trim(),
+                description: el('manualDescription').value.trim(),
+                categoryId: el('manualCategory').value,
+                orderId: el('manualOrder').value || null,
+                confirmed: true
+            });
+            toast('工单已创建，客服会尽快处理。');
+            navigate('ticket', ticket.id);
+        } catch (error) {
+            toast(error.message, true);
+            setBusy(button, false);
+        }
+    });
+}
+
 /* ---------------- 工单详情 ---------------- */
 
 async function renderTicketDetail() {
@@ -465,6 +572,7 @@ async function renderTicketDetail() {
     const ticket = detail.ticket;
     const category = categories.find(item => item.id === ticket.categoryId);
 
+    if (!isCurrentRender()) return;
     view.innerHTML = `
         <div class="view-inner">
             <button class="button ghost small" type="button" data-back>← 返回列表</button>
@@ -705,13 +813,15 @@ function renderAssistant() {
                         <button class="button primary" type="button" id="assistantSend">发送</button>
                         <button class="button secondary" type="button" id="assistantStop" hidden>停止</button>
                     </div>
-                    <p class="composer-status" id="assistantStatus">助手只做查询和建议；创建工单需要你确认。</p>
+                    <p class="composer-status" id="assistantStatus"><span id="assistantStatusText">助手只做查询和建议；创建工单需要你确认。</span><button class="text-button" type="button" id="manualFallback">手动建单</button></p>
                 </div>
             </div>
         </div>`;
 
     const input = el('assistantInput');
     el('assistantSend').addEventListener('click', () => sendAssistantMessage());
+    el('assistantStop').addEventListener('click', () => assistantController && assistantController.abort());
+    el('manualFallback').addEventListener('click', () => navigate('newTicket'));
     input.addEventListener('keydown', event => {
         if (event.key === 'Enter' && !event.shiftKey) {
             event.preventDefault();
@@ -748,7 +858,7 @@ async function sendAssistantMessage() {
     input.value = '';
     appendBubble('user', message);
     const answer = appendBubble('assistant', '');
-    const status = el('assistantStatus');
+    const status = el('assistantStatusText');
     status.textContent = '正在查询订单和资料…';
     assistantBusy = true;
     el('assistantSend').disabled = true;
@@ -762,7 +872,8 @@ async function sendAssistantMessage() {
             status.textContent = '已停止这次回答。';
         } else {
             answer.textContent = (answer.textContent || '') + `\n\n本次回答失败：${error.message}`;
-            status.textContent = '助手不可用时，你仍然可以在“我的工单”里手动创建和处理工单。';
+            status.textContent = '助手暂时不可用，你仍然可以手动创建工单。';
+            appendManualFallback(answer);
         }
     } finally {
         assistantBusy = false;
@@ -779,7 +890,7 @@ async function streamAssistant(message, answerNode, statusNode) {
     const response = await window.fetch('/api/v1/support/assistant/stream', {
         method: 'POST',
         headers,
-        body: JSON.stringify({ message, conversationId: assistantConversationId }),
+        body: JSON.stringify({ message, conversationId: assistantConversationId, knowledgeBaseId: 'product-support' }),
         signal: assistantController.signal
     });
     if (!response.ok || !response.body) {
@@ -792,7 +903,7 @@ async function streamAssistant(message, answerNode, statusNode) {
         const { value, done } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
-        const blocks = buffer.split('\n\n');
+        const blocks = buffer.split(/\r?\n\r?\n/);
         buffer = blocks.pop();
         for (const block of blocks) handleSseBlock(block, answerNode, statusNode);
     }
@@ -801,12 +912,12 @@ async function streamAssistant(message, answerNode, statusNode) {
 
 function handleSseBlock(block, answerNode, statusNode) {
     const eventMatch = block.match(/^event:(.+)$/m);
-    const dataMatch = block.match(/^data:(.+)$/m);
-    if (!eventMatch || !dataMatch) return;
+    const dataLines = [...block.matchAll(/^data:(.*)$/gm)].map(match => match[1]);
+    if (!eventMatch || !dataLines.length) return;
     const type = eventMatch[1].trim();
     let payload;
     try {
-        payload = JSON.parse(dataMatch[1]);
+        payload = JSON.parse(dataLines.join('\n'));
     } catch (_) {
         return;
     }
@@ -818,14 +929,15 @@ function handleSseBlock(block, answerNode, statusNode) {
         statusNode.textContent = `正在调用 ${toolLabel(data.toolName)}…`;
     } else if (type === 'tool.completed') {
         statusNode.textContent = `${toolLabel(data.toolName)} 已返回结果`;
-        if (data.toolName === 'support_ticket_draft' && data.resultPreview) {
-            const draft = extractDraft(data.resultPreview);
-            if (draft) offerDraft(draft);
-        }
+    } else if (type === 'support.ticket-draft.ready' && data.draft) {
+        offerDraft(data.draft);
+    } else if (type === 'support.knowledge.evidence') {
+        renderEvidence(answerNode, data);
     } else if (type === 'task.completed') {
         statusNode.textContent = '回答完成。需要人工处理时，请确认下方草稿创建工单。';
     } else if (type === 'task.failed') {
         statusNode.textContent = data.message || '本次回答失败，可以稍后重试或手动创建工单。';
+        appendManualFallback(answerNode);
     }
 }
 
@@ -844,15 +956,36 @@ function toolLabel(name) {
     return TOOL_LABELS[name] || name;
 }
 
-/** 工具结果里包含后端生成的 requestId、标题、分类和订单；只有 confirmed=false 才允许当成草稿。 */
-function extractDraft(text) {
-    try {
-        const draft = JSON.parse(text);
-        if (!draft || typeof draft !== 'object' || !draft.requestId || draft.confirmed === true) return null;
-        return draft;
-    } catch (_) {
-        return null;
-    }
+/** 显示后端从授权检索结果投影出的出处；不依赖模型自行复述文件名或页码。 */
+function renderEvidence(answerNode, evidence) {
+    const bubble = answerNode.closest('.bubble');
+    if (!bubble) return;
+    bubble.querySelector('[data-evidence]')?.remove();
+    const section = document.createElement('section');
+    section.className = `evidence-box ${evidence.evidenceSufficient ? '' : 'evidence-empty'}`;
+    section.dataset.evidence = 'true';
+    // 过滤 null/非对象元素：投影只保证来源来自授权检索，不保证每个元素都可用。
+    const sources = (Array.isArray(evidence.sources) ? evidence.sources : [])
+        .filter(source => source && typeof source === 'object');
+    section.innerHTML = evidence.evidenceSufficient && sources.length
+        ? `<strong>可核对出处</strong><ul>${sources.map(source => {
+            const location = source.pageNumber ? `第 ${source.pageNumber} 页` : `片段 ${Number(source.chunkIndex ?? 0) + 1}`;
+            return `<li><span>${escapeHtml(source.filename)} · ${escapeHtml(location)}</span><small>${escapeHtml(source.excerpt || '')}</small></li>`;
+        }).join('')}</ul>`
+        : `<strong>知识库暂无依据</strong><p>${escapeHtml(evidence.nextAction || evidence.message || '你可以补充资料或手动创建工单。')}</p>`;
+    bubble.appendChild(section);
+}
+
+function appendManualFallback(answerNode) {
+    const bubble = answerNode.closest('.bubble');
+    if (!bubble || bubble.querySelector('[data-manual-fallback]')) return;
+    const button = document.createElement('button');
+    button.className = 'button secondary small';
+    button.type = 'button';
+    button.dataset.manualFallback = 'true';
+    button.textContent = '改为手动建单';
+    button.addEventListener('click', () => navigate('newTicket'));
+    bubble.appendChild(button);
 }
 
 function offerDraft(draft) {
@@ -878,37 +1011,41 @@ function closeDraftModal() {
 }
 
 async function confirmDraft() {
-    if (!pendingDraft) return;
+    // 先快照：下面的 await 期间可能收到第二张草稿或用户点了「暂不创建」，
+    // 每次都从快照取字段，避免「确认的是 A、提交的是 B」或对 null 取属性。
+    const draft = pendingDraft;
+    if (!draft) return;
     const button = el('draftConfirm');
     const status = el('draftStatus');
     setBusy(button, true, '正在创建…');
     try {
         // 先检查是否已经建单：避免用户重复点击或刷新后重复提交。
-        const existingResponse = await api(`/api/v1/support/ticket-drafts/${encodeURIComponent(pendingDraft.requestId)}`);
+        const existingResponse = await api(`/api/v1/support/ticket-drafts/${encodeURIComponent(draft.requestId)}`);
         if (existingResponse.status === 200) {
             const existing = await existingResponse.json();
             status.textContent = `这张草稿已经创建过工单，直接打开原工单。`;
             closeDraftModal();
             toast('该草稿已创建过工单，已为你打开。');
             navigate('ticket', existing.id);
+            if (pendingDraft === draft) pendingDraft = null;
             return;
         }
         const ticket = await postJson('/api/v1/support/tickets', {
-            requestId: pendingDraft.requestId,
-            title: pendingDraft.title,
-            description: pendingDraft.description,
-            categoryId: pendingDraft.categoryId,
-            orderId: pendingDraft.orderId || null,
+            requestId: draft.requestId,
+            title: draft.title,
+            description: draft.description,
+            categoryId: draft.categoryId,
+            orderId: draft.orderId || null,
             confirmed: true
         });
         closeDraftModal();
         toast('工单已创建，客服会尽快处理。');
         navigate('ticket', ticket.id);
+        if (pendingDraft === draft) pendingDraft = null;
     } catch (error) {
         status.textContent = error.message;
     } finally {
         setBusy(button, false);
-        pendingDraft = null;
     }
 }
 
@@ -981,6 +1118,7 @@ async function renderCategories() {
 
 async function renderAssignment() {
     const tickets = await getJson('/api/v1/support/tickets?view=all');
+    if (!isCurrentRender()) return;
     view.innerHTML = `
         <div class="view-inner">
             <div class="section-head"><div><h2>工单分配</h2><p>共 ${tickets.length} 张工单。打开工单后可以把待受理或处理中的工单分配给客服。</p></div></div>
@@ -1010,6 +1148,7 @@ async function renderCatalog() {
     ]);
     const users = await getJson('/api/v1/support/accounts?role=USER').catch(() => []);
 
+    if (!isCurrentRender()) return;
     view.innerHTML = `
         <div class="view-inner">
             <div class="section-head"><div><h2>产品与模拟订单</h2>
@@ -1110,15 +1249,19 @@ async function renderCatalog() {
 async function renderKnowledge() {
     const bases = await getJson('/api/v1/knowledge-bases');
     const writable = bases.filter(base => base.writable);
-    const selected = writable[0] || bases[0];
+    const preferredId = selectedKnowledgeBaseId || (me.role === 'ADMIN' ? 'product-support' : null);
+    const selected = bases.find(base => base.id === preferredId) || writable[0] || bases[0];
+    if (selected) selectedKnowledgeBaseId = selected.id;
     let documents = selected ? await getJson(`/api/v1/knowledge-bases/${encodeURIComponent(selected.id)}/documents`) : [];
 
+    if (!isCurrentRender()) return;
     view.innerHTML = `
         <div class="view-inner">
             <div class="section-head"><div><h2>知识库</h2>
                 <p>公共库 product-support 由管理员维护；私人文档按账号隔离，其他账号和管理员都不能读取。</p></div></div>
             <div class="panel">
                 <h3>知识库列表</h3>
+                ${bases.length ? `<div class="field"><label class="field-label" for="knowledgeViewer">查看知识库</label><select id="knowledgeViewer">${bases.map(base => `<option value="${escapeHtml(base.id)}" ${base.id === selected.id ? 'selected' : ''}>${escapeHtml(base.id)} · ${base.visibility === 'PUBLIC' ? '公共' : '私人'}</option>`).join('')}</select></div>` : ''}
                 <div class="table-wrap"><table class="data-table">
                     <thead><tr><th>名称</th><th>范围</th><th>可写</th></tr></thead>
                     <tbody>${bases.map(base => `<tr>
@@ -1127,7 +1270,7 @@ async function renderKnowledge() {
                         <td>${base.writable ? '是' : '否'}</td>
                     </tr>`).join('')}</tbody></table></div>
             </div>
-            ${selected ? `
+            ${selected && selected.writable ? `
             <div class="panel">
                 <h3>上传文档到 ${escapeHtml(selected.id)}</h3>
                 <p class="panel-description">支持 PDF / TXT / Markdown，单文件不超过 20MB。上传后异步解析、分块并向量化；检索结果会带文件名与页码。</p>
@@ -1137,14 +1280,22 @@ async function renderKnowledge() {
                     <div class="field"><label class="field-label" for="documentInput">选择文件</label><input id="documentInput" type="file" accept=".pdf,.txt,.md,.markdown" required></div>
                     <button class="button primary" type="submit">上传</button>
                 </form>
-            </div>
+            </div>` : selected ? `<div class="panel"><h3>${escapeHtml(selected.id)}</h3><p class="panel-description">当前知识库只读；公共产品资料只有管理员可以维护。</p></div>` : ''}
+            ${selected ? `
             <div class="panel">
                 <h3>文档（${escapeHtml(selected.id)}）</h3>
                 <div id="documentArea"></div>
             </div>` : '<div class="empty"><strong>没有可用知识库</strong>当前账号还没有可读取的知识库。</div>'}
         </div>`;
 
-    renderDocuments(documents);
+    if (selected) renderDocuments(documents, selected.id, Boolean(selected.writable));
+
+    if (el('knowledgeViewer')) {
+        el('knowledgeViewer').addEventListener('change', async event => {
+            selectedKnowledgeBaseId = event.target.value;
+            await dispatch();
+        });
+    }
 
     if (el('uploadForm')) {
         el('uploadForm').addEventListener('submit', async event => {
@@ -1171,7 +1322,7 @@ async function renderKnowledge() {
 
 const DOCUMENT_LABELS = Object.freeze({ PROCESSING: '处理中', READY: '已就绪', FAILED: '处理失败', DELETING: '删除中' });
 
-function renderDocuments(documents) {
+function renderDocuments(documents, knowledgeBaseId, writable) {
     const area = el('documentArea');
     if (!documents.length) {
         area.innerHTML = '<p class="muted">这个知识库里还没有文档。上传产品手册、开通说明或常见故障后，助手检索时会引用文件名和页码。</p>';
@@ -1185,15 +1336,15 @@ function renderDocuments(documents) {
             <td class="mono">${doc.chunkCount ?? '—'}</td>
             <td class="mono">${Math.round((doc.size || 0) / 1024)} KB</td>
             <td><div class="actions">
-                ${doc.status === 'FAILED' ? `<button class="button small" type="button" data-retry="${escapeHtml(doc.id)}">重试</button>` : ''}
-                <button class="button small danger" type="button" data-delete="${escapeHtml(doc.id)}">删除</button>
+                ${writable && doc.status === 'FAILED' ? `<button class="button small" type="button" data-retry="${escapeHtml(doc.id)}">重试</button>` : ''}
+                ${writable ? `<button class="button small danger" type="button" data-delete="${escapeHtml(doc.id)}">删除</button>` : ''}
             </div></td>
         </tr>`).join('')}</tbody></table></div>`;
 
     area.querySelectorAll('[data-retry]').forEach(button => button.addEventListener('click', async () => {
         setBusy(button, true);
         try {
-            const base = el('knowledgeBase') ? el('knowledgeBase').value : 'product-support';
+            const base = knowledgeBaseId;
             await postJson(`/api/v1/knowledge-bases/${encodeURIComponent(base)}/documents/${encodeURIComponent(button.dataset.retry)}/retry`, {});
             toast('已请求重新处理');
             await dispatch();
@@ -1205,7 +1356,7 @@ function renderDocuments(documents) {
     area.querySelectorAll('[data-delete]').forEach(button => button.addEventListener('click', async () => {
         setBusy(button, true);
         try {
-            const base = el('knowledgeBase') ? el('knowledgeBase').value : 'product-support';
+            const base = knowledgeBaseId;
             const response = await api(`/api/v1/knowledge-bases/${encodeURIComponent(base)}/documents/${encodeURIComponent(button.dataset.delete)}`, { method: 'DELETE' });
             if (!response.ok) throw new ApiError(response.status, await readError(response, '删除失败'));
             toast('文档已删除');

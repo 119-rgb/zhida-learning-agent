@@ -15,7 +15,6 @@ import com.zhida.agent.tool.ResearchTools;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecifications;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
@@ -35,7 +34,7 @@ class SupportAgentToolsTest {
   SupportActorResolver actors;
   ProductOrderService orders;
   SupportTicketService tickets;
-  ResearchTools tools;
+  SupportTools tools;
   ObservableToolInterceptor interceptor;
   Actor user;
   Actor other;
@@ -67,14 +66,7 @@ class SupportAgentToolsTest {
         orders.createProduct(admin, "AGENT-TOOL", "虚构 Agent 订阅", "隔离自动测试").id();
     ownedOrder = order(user, productId);
     foreignOrder = order(other, productId);
-    tools =
-        new ResearchTools(
-            null,
-            null,
-            mock(KnowledgeBaseService.class),
-            Optional.of(orders),
-            Optional.of(tickets),
-            Optional.of(actors));
+    tools = new SupportTools(orders, tickets, actors, mock(KnowledgeBaseService.class));
     var traces = new ToolTracePublisher();
     traces.open("task", 20, ignored -> {});
     interceptor = new ObservableToolInterceptor(traces);
@@ -95,9 +87,9 @@ class SupportAgentToolsTest {
         user.id(),
         request("support_orders"),
         () -> {
-          listed.set(tools.supportOrders());
+          listed.set(tools.myOrders());
           draft.set(
-              tools.supportTicketDraft(
+              tools.ticketDraft(
                   "已付款但服务未开通",
                   "虚构订单付款后仍显示未开通。",
                   categoryId,
@@ -136,7 +128,7 @@ class SupportAgentToolsTest {
                     request("support_ticket_draft"),
                     () ->
                         tools
-                            .supportTicketDraft(
+                            .ticketDraft(
                                 "越权草稿",
                                 "不能关联其他用户的虚构订单。",
                                 categoryId,
@@ -163,6 +155,18 @@ class SupportAgentToolsTest {
                     || name.contains("refund")
                     || name.contains("payment")
                     || name.contains("activate"));
+  }
+
+  @Test
+  void generalResearchToolsDoNotExposeSupportBusinessData() {
+    var researchTools = new ResearchTools(null, null, mock(KnowledgeBaseService.class));
+    assertThat(
+            ToolSpecifications.toolSpecificationsFrom(researchTools).stream()
+                .map(spec -> spec.name())
+                .toList())
+        .containsExactlyInAnyOrder(
+            "current_date", "web_search", "read_web_page", "knowledge_search")
+        .noneMatch(name -> name.startsWith("support_"));
   }
 
   private ToolExecutionRequest request(String name) {

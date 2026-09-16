@@ -24,7 +24,7 @@
 - 列表响应提供 `visibility` 与 `writable` 供页面展示，写接口仍重新查询数据库角色，不信任页面按钮或请求参数。
 - 检索命中保留文件名、PDF 页码或文本片段编号；无命中、无文档或处理中统一返回 `evidenceSufficient=false`，并以 `nextAction` 引导补充资料或手动建单。
 
-## 模块 5：三端页面（已实现并真实浏览器验收）
+## 模块 5：三端页面（已实现、真实浏览器闭环验收、独立审查待完成）
 
 - 新增 `/support.html` + `support.js` + `support.css`：此前模块 1–4 只有后端接口，没有任何售后页面，这是用户实际反馈的缺口。
 - 用户端：售后助手（复用 `POST /api/v1/support/assistant/stream` 的 SSE）、我的工单、工单详情。
@@ -48,6 +48,36 @@
 
 未执行：跨浏览器（Firefox/Safari）、移动端真机、无障碍审计，以及把页面用例纳入 `mvn test`。
 
+### 2026-09-17 模块 5 收尾（本轮实际执行）
+
+在隔离 H2 + demo-data 实例上修复了两个真实页面缺陷，并把浏览器闭环从「走到长草稿弹窗」推进到**完整闭环通过**：
+
+- `src/main/resources/static/support.css`：`.auth-dialog.wide` 缺少高度限制。问题描述接近 4000 字时确认按钮位于视口之外且弹窗不可滚动，用户无法确认建单。已加 `max-height: calc(100dvh - 48px)` 与 `overflow-y: auto`。
+- `src/main/resources/static/support.js`：`start()` 与 `hashchange` 会并发调用 `dispatch()`，先发起后返回的那次会用过期数据覆盖新渲染，表现为详情页显示旧状态（例如工单已到「待用户确认」却仍显示「待受理」，操作按钮只剩「补充说明」）。已加渲染序号 `dispatchToken`，过期结果不写视图。
+- `scripts/verify-support-workbench.cjs`：原先用页面文案判定状态，会匹配到历史事件文字而误判；`page.goto()` 到只差 hash 的同文档 URL 不会重新加载文档。已改为轮询后端详情接口判定状态、详情用整页 `reload` 打开、操作按钮显式等待可交互并在失败时输出面板内容。
+
+实际执行结果：
+
+- `node scripts/verify-support-workbench.cjs`：**PASS**，修复审查意见后连续多次通过（含加严的 SSE 契约探针与「发送后手动入口仍可见」回归断言）。覆盖用户订单与结构化出处、长草稿确认建单、客服接单/回复/方案、用户退回、客服再次方案、用户关闭评价、手动建单、管理端公共知识库默认项与维护入口。
+- `mvn -o clean verify '-Dzhida.build.directory=tmp/dsh-module5-final2'`：133 项、0 失败、0 错误、1 项真实 MySQL 测试跳过，可执行 JAR 生成成功（比审查前多 5 项：演示数据 3 条安全停止负向用例、投影失败不影响回答 1 项，以及原有用例的加严）。
+- `node --check` 覆盖 `app.js`、`support.js`、`scripts/verify-support-workbench.cjs`：全部通过；`git diff --check` 无空白错误。
+
+### 2026-09-17 模块 5 独立审查与修复
+
+模块 5 的独立只读审查由未参与实现的审查者完成，结论为**无 P0、可以提交**，安全边界（售后助手仅 USER 角色且在进模型前拒绝、全仓 12 个 `@Tool` 均为只读或草稿、演示数据不接管已有账号、前端隐藏不作为授权）经代码与自动测试双向核实成立。审查同时发现并已修复：
+
+1. **功能回归（本轮新增代码引入）**：`renderAssistant` 把「手动建单」按钮放进 `#assistantStatus`，而既有代码用 `textContent` 更新该节点，发送第一条消息后按钮连同监听器被删除——恰好在模型失败、最需要降级入口时失效。已把状态文字拆为独立 `<span id="assistantStatusText">`，并让浏览器脚本在**发送之后**再次断言入口可见。
+2. **`dispatchToken` 保护不完整**：原先只在 `loadCounts()` 之后复检，各 `render*` 在自己 await 之后写 `view.innerHTML` 时仍可覆盖新页面（标题是新路由、正文是旧路由）。已改为视图根元素记录渲染序号，所有 await 后的写入都经 `isCurrentRender()` 守卫。
+3. **脚本密码变量名错误**：脚本读 `ZHIDA_SUPPORT_DEMO_PASSWORD`，而应用绑定 `zhida.support.demo-data.password`，按文档操作会在登录前直接报错退出。脚本与应用异常信息都已改为正确名称。
+4. **脚本对新增 SSE 事件无覆盖**：回放自造事件无法证明后端投影可用。已增加真实接口的 SSE 契约探针。
+5. **`emitSupportUiResult` 捕获过窄**：只捕获受检的 `JsonProcessingException`，与「投影失败不影响回答」不符（`results` 为空时会抛 `NullPointerException`）。已同时捕获 `RuntimeException` 并记录工具名与异常类型，并补测试证明投影失败时任务仍完成。
+6. **演示数据单角色假设与负向覆盖缺失**：角色检查改为任一角色行不符即停止；新增同名不同 ID、演示 ID 被占用、角色被改三条负向用例。
+7. **`pendingDraft` TOCTOU 与登出残留**：`confirmDraft` 先快照再取字段，成功后仅在同一张草稿时清空；`signOut` 清空草稿并关闭弹窗。
+
+审查记录见 [docs/reviews/2026-09-17-module-5.md](reviews/2026-09-17-module-5.md)。
+
+本轮未执行：真实 MySQL 上的页面闭环（浏览器验收跑在隔离 H2 + demo-data 上）、真实模型驱动的页面闭环（脚本用构造的 SSE 事件）、跨浏览器与移动端、Docker、页面用例纳入 `mvn test`。
+
 ## 模块 4：已实现并自动验收（独立审查待安排）
 
 - 新增售后 Agent 入口 `POST /api/v1/support/assistant/stream`，仅在 `zhida.support.enabled=true` 时注册；未登录 401、游客 403，身份只来自 JWT Principal。
@@ -64,7 +94,14 @@
 
 `mvn clean verify '-Dzhida.build.directory=tmp/module4-final-build'` 成功退出：124 项、0 失败、0 错误、1 项真实 MySQL 测试跳过，可执行 JAR 生成成功。模块 4 新增 9 项：`SupportAgentOrchestrationTest` 6 项（指令与工具集、他人订单 404、伪造 userId 无效、草稿需确认、知识出处与注入、模型失败降级）、`SupportAssistantHttpTest` 2 项（401/403 与 Demo 模式 SSE 不建单）、`SupportTicketHttpTest` 新增 1 项（草稿 requestId 防重复与用户隔离）。
 
-模型与供应商均为可编程替身，知识库检索使用替身返回固定片段，订单与工单使用隔离 H2 数据库；本轮没有调用真实 DeepSeek、Embedding 或 Tavily，也没有执行浏览器验收。真实 MySQL、真实模型、浏览器和 Docker 验收本次未执行。三端页面（模块 5）未实现，下一步为页面与完整演示。
+模型与供应商均为可编程替身，知识库检索使用替身返回固定片段，订单与工单使用隔离 H2 数据库；本轮没有调用真实 DeepSeek、Embedding 或 Tavily。真实 MySQL、真实模型、Docker 验收本次未执行（模块 4 的真实模型会话在 2026-09-17 的接力运行中补做，见下节）。
+
+### 2026-09-17 模块 4 独立审查、修复与真实模型补验
+
+- 模块 4 本轮完成**独立只读审查**（审查者未参与实现），并修复 5 项问题：售后助手缺省知识库从私人 `default` 改为公共 `product-support`；售后助手只允许普通用户，客服与管理员在进入模型前返回 403；从通用 `ResearchTools` 移除全部售后订单、工单与草稿工具，使研究与售后工具集真正隔离；新增 `support.ticket-draft.ready` 与 `support.knowledge.evidence` 结构化 SSE 事件，页面不再从 800 字审计摘要里解析草稿和出处；工具审计事件先于页面业务投影事件发送。审查者复查确认原 P1/P2 已关闭，其提出的两个 P3 也已修复。
+- **真实模型补验（接力运行实际执行）**：在启用真实 DeepSeek、真实 MySQL（8.0.22）的实例上，用虚构账号走通售后助手会话。数据库记录的 `research_task_event` 显示模型实际调用了 `support_orders`(16ms)、`knowledge_search`(7ms)、`support_ticket`(8ms) 三个**只读**工具；回答引用了真实订单号 `DEMO-A5F6979350B54A24`（`PAID`/`NOT_ACTIVATED`），并明确表示知识库暂无相关规则、不能凭通用经验给出开通时限或承诺。该轮没有任何写工具被调用，`support_ticket` 计数保持 0。
+- 同一实例上以真实 MySQL 验证工单闭环与审计一致性：`v0 CREATED → v1 CLAIM → v2 REPLY → v3 SOLUTION → v4 REOPEN → v5 SOLUTION → v6 CONFIRM`，每版本一条事件，最终 `CLOSED` 且评分 5；用户 B 读取用户 A 的订单返回 404；用户 `view=pending`/`view=all` 返回 403；游客 403、匿名 401；管理员录入「待付款+已开通」返回 400；两个客服同时接单时只有一个成功。
+- 真实模型在本轮表现为**不主动调用草稿工具**（3 轮会话共 10 次工具调用，全部为查询类），因此「未经确认不会建单」在真实模型下成立，但也说明草稿入口需要页面显式引导。此观察已记入后续改进。
 
 测试期间发现并修复两点：(1) `ResponseEntity.of(Optional.empty())` 实际返回 404，会把“尚未建单”误报为“资源不存在”，已改为显式映射 200/204；(2) HTTP 测试共用同一来源地址的每分钟限流窗口，用例增多后互相触发 429，已为测试提供只清空计数窗口的 `RequestRateFilter.resetForTests()`，生产限流规则未改动。
 

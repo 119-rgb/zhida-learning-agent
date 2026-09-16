@@ -1,13 +1,17 @@
 package com.zhida.agent.application;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.zhida.agent.agent.ResearchAgentConfiguration;
 import com.zhida.agent.agent.model.ResearchPlan;
 import com.zhida.agent.agent.planner.QuestionPlanner;
 import com.zhida.agent.api.dto.ResearchRequest;
 import com.zhida.agent.common.config.ZhidaProperties;
 import com.zhida.agent.knowledge.KnowledgeBaseAccessService;
+import com.zhida.agent.knowledge.KnowledgeSearchResponse;
 import com.zhida.agent.observability.*;
 import com.zhida.agent.support.SupportAgentInstruction;
+import com.zhida.agent.support.SupportTicketService;
 import com.zhida.agent.support.SupportTools;
 import com.zhida.agent.tool.ResearchTools;
 import dev.langchain4j.agent.tool.*;
@@ -27,6 +31,9 @@ import org.springframework.web.server.ResponseStatusException;
 
 @Service
 public class ResearchOrchestrator {
+  private static final org.slf4j.Logger log =
+      org.slf4j.LoggerFactory.getLogger(ResearchOrchestrator.class);
+  private static final ObjectMapper TOOL_RESULT_MAPPER = new ObjectMapper();
   private final QuestionPlanner planner;
   private final ObjectProvider<StreamingChatModel> models;
   private final ZhidaProperties properties;
@@ -437,10 +444,65 @@ public class ResearchOrchestrator {
           while ((pending = queue.poll()) != null) {
             if (pending instanceof ToolTrace trace) emitTrace(trace);
           }
+          // 审计时间线先记录工具完成，再发布页面所需的业务投影，避免 UI 显得早于工具结果。
+          emitSupportUiResult(request.name(), text);
           check();
           messages.add(ToolExecutionResultMessage.from(request, text));
         }
       }
+    }
+
+    /**
+     * 售后页面需要完整草稿和可核对出处，不能从最多 800 字的审计摘要反向解析。这里仅把已经过
+     * 工具权限校验的结果投影为专用 SSE 事件；原始工具结果仍照常回传给模型，审计摘要也保持限长。
+     *
+     * <p>投影失败不影响 Agent 回答：这里同时捕获 Jackson 的受检 {@link JsonProcessingException}
+     * 和 {@link RuntimeException}，因为反序列化还可能抛出参数不匹配等其它运行时异常
+     * （例如记录类型缺少 {@code -parameters} 时）。展示层的问题不能把一次正常回答变成 task.failed，
+     * 否则用户会失去「模型已经答完、只是页面少了一个卡片」这个降级路径。
+     */
+    private void emitSupportUiResult(String toolName, String result) {
+      if (mode != AgentMode.SUPPORT || result == null) return;
+      try {
+        if ("support_ticket_draft".equals(toolName)) {
+          SupportTicketService.Draft draft =
+              TOOL_RESULT_MAPPER.readValue(result, SupportTicketService.Draft.class);
+          emit("support.ticket-draft.ready", Map.of("draft", draft));
+        } else if ("knowledge_search".equals(toolName)) {
+          KnowledgeSearchResponse response =
+              TOOL_RESULT_MAPPER.readValue(result, KnowledgeSearchResponse.class);
+          var sources =
+              response.results().stream()
+                  .map(
+                      chunk -> {
+                        Map<String, Object> source = new LinkedHashMap<>();
+                        source.put("filename", chunk.filename());
+                        source.put("pageNumber", chunk.pageNumber());
+                        source.put("chunkIndex", chunk.chunkIndex());
+                        source.put("excerpt", abbreviateExcerpt(chunk.content()));
+                        return source;
+                      })
+                  .toList();
+          Map<String, Object> evidence = new LinkedHashMap<>();
+          evidence.put("evidenceSufficient", response.evidenceSufficient());
+          evidence.put("message", response.message());
+          evidence.put("nextAction", response.nextAction());
+          evidence.put("sources", sources);
+          emit("support.knowledge.evidence", evidence);
+        }
+      } catch (JsonProcessingException | RuntimeException error) {
+        // 只记录工具名和异常类型，不写入工具结果正文，避免把用户数据带进日志。
+        log.warn(
+            "售后结果投影失败，已跳过页面事件：tool={} type={}",
+            toolName,
+            error.getClass().getSimpleName());
+      }
+    }
+
+    private String abbreviateExcerpt(String value) {
+      if (value == null) return "";
+      String normalized = value.replaceAll("\\s+", " ").trim();
+      return normalized.length() <= 240 ? normalized : normalized.substring(0, 240) + "…";
     }
 
     /** 系统指令按服务端模式选择；模型和客户端都无法替换这里的规则来源。 */

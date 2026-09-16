@@ -134,6 +134,8 @@ MySQL 数据库 `zhida_agent` 需提前创建，应用账户需具备该库读�
 - 页面需要服务端同时启用售后模块、JWT 与数据库；`GET /api/health` 返回 `supportEnabled` 供首页决定是否显示工作台入口。
 - 建单流程严格区分「草稿」与「工单」：助手只能生成不落库的草稿，页面展示后由用户点击确认，才以 `confirmed=true` 提交；提交前先按 `requestId` 查重。
 - 演示步骤、权限拒绝清单和当前限制见 [docs/SUPPORT_WORKBENCH.md](docs/SUPPORT_WORKBENCH.md)。
+- 可重复的虚构演示数据由可选开关准备：同时开启 `zhida.support.demo-data.enabled` 并通过 `ZHIDA_SUPPORT_DEMO_DATA_PASSWORD` 提供 8–64 位临时密码，应用会幂等创建演示账号、分类、产品和「已付款未开通」订单；遇到同名非演示账号会停止启动而不是接管。
+- 完整页面闭环的浏览器验收脚本是 `scripts/verify-support-workbench.cjs`（Playwright + Chromium，headless，不写截图、Token 或密码）。
 
 ## 售后 Agent（模块 4，已实现）
 
@@ -199,7 +201,7 @@ mvn package
 
 简历项目说明及源码面试地图见 [docs/RESUME_PROJECT.md](docs/RESUME_PROJECT.md)。完整开发要求见 [DEVELOPMENT_SPEC.md](DEVELOPMENT_SPEC.md)。
 
-分阶段独立审查与修复记录见 [docs/reviews](docs/reviews/README.md)，模块 1–3 均已完成独立审查和修复复查；模块 4 的独立审查尚待另一位审查者完成，当前只有实现者自测记录（见 [docs/reviews/2026-09-16-module-4.md](docs/reviews/2026-09-16-module-4.md)）。工单注释可从 SupportTicketService 开始，订单边界从 ProductOrderService 与 ProductOrderRepository 开始，知识库边界从 KnowledgeBaseAccessService 开始，Agent 边界从 SupportAssistantController、SupportAgentInstruction 与 SupportTools 开始。
+分阶段独立审查与修复记录见 [docs/reviews](docs/reviews/README.md)：模块 1–3 已完成独立审查和修复复查；模块 4 与模块 5 均已由未参与实现的审查者完成只读 review，问题已修复并复查（模块 5 记录见 [docs/reviews/2026-09-17-module-5.md](docs/reviews/2026-09-17-module-5.md)），审查遗留的 P3 清理项尚未处理。工单注释可从 SupportTicketService 开始，订单边界从 ProductOrderService 与 ProductOrderRepository 开始，知识库边界从 KnowledgeBaseAccessService 开始，Agent 边界从 SupportAssistantController、SupportAgentInstruction 与 SupportTools 开始，页面与演示数据边界从 static/support.js、SupportDemoDataConfiguration 与 scripts/verify-support-workbench.cjs 开始。
 
 ## 来源
 

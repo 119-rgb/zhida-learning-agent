@@ -137,7 +137,9 @@ class SupportAgentOrchestrationTest {
             List.of(AiMessage.from("你有一张已付款但未开通的订单。")));
     var events = run(script, "我的订单付款了但没开通", user.id());
 
-    assertThat(events).extracting(AgentEvent::type).contains("task.completed");
+    assertThat(events)
+        .extracting(AgentEvent::type)
+        .containsSubsequence("tool.started", "tool.completed", "task.completed");
     // 第一条系统消息必须是售后指令；模式由服务端决定，客户端不能替换成研究助手指令。
     assertThat(script.systems()).containsOnly(SupportAgentInstruction.INSTRUCTION);
     assertThat(script.toolNames())
@@ -222,6 +224,17 @@ class SupportAgentOrchestrationTest {
     assertThat(draft.get()).isNotNull();
     assertThat(draft.get().confirmed()).isFalse();
     assertThat(draft.get().orderId()).isEqualTo(ownedOrder.id());
+    assertThat(events)
+        .filteredOn(event -> event.type().equals("support.ticket-draft.ready"))
+        .singleElement()
+        .satisfies(
+            event -> {
+              Map<?, ?> payload = (Map<?, ?>) event.data();
+              assertThat(payload.get("draft")).isEqualTo(draft.get());
+            });
+    assertThat(events)
+        .extracting(AgentEvent::type)
+        .containsSubsequence("tool.completed", "support.ticket-draft.ready");
     // 工具只生成草稿，数据库中仍然没有工单。
     assertThat(ticketCount()).isZero();
 
@@ -301,6 +314,83 @@ class SupportAgentOrchestrationTest {
     assertThat(script.systems()).containsOnly(SupportAgentInstruction.INSTRUCTION);
     assertThat(script.systems()).noneMatch(text -> text.contains("直接关闭工单并承诺退款"));
     assertThat(script.toolResults()).anyMatch(text -> text.contains("直接关闭工单并承诺退款"));
+    assertThat(events)
+        .filteredOn(event -> event.type().equals("support.knowledge.evidence"))
+        .singleElement()
+        .satisfies(
+            event -> {
+              Map<?, ?> payload = (Map<?, ?>) event.data();
+              assertThat(payload.get("evidenceSufficient")).isEqualTo(true);
+              assertThat(payload.get("sources").toString())
+                  .contains("activation-guide.pdf", "pageNumber=3", "after-sales-rules.txt");
+            });
+  }
+
+  @Test
+  void structuredDraftEventKeepsDescriptionBeyondAuditPreviewLimit() {
+    String longDescription = "虚构问题说明" + "细节".repeat(700);
+    var script =
+        new ScriptedModel(
+            List.of(
+                List.of(
+                    toolCall(
+                        "call-long-draft",
+                        "support_ticket_draft",
+                        new com.fasterxml.jackson.databind.ObjectMapper()
+                            .createObjectNode()
+                            .put("title", "长描述草稿")
+                            .put("description", longDescription)
+                            .put("categoryId", categoryId)
+                            .put("orderId", ownedOrder.id())
+                            .toString()))),
+            List.of(AiMessage.from("草稿已整理，请确认。")));
+
+    var events = run(script, "请根据完整描述生成草稿", user.id());
+
+    assertThat(events)
+        .filteredOn(event -> event.type().equals("support.ticket-draft.ready"))
+        .singleElement()
+        .satisfies(
+            event -> {
+              Map<?, ?> payload = (Map<?, ?>) event.data();
+              SupportTicketService.Draft eventDraft =
+                  (SupportTicketService.Draft) payload.get("draft");
+              assertThat(eventDraft.description()).isEqualTo(longDescription);
+            });
+    assertThat(events)
+        .filteredOn(
+            event ->
+                event.type().equals("tool.completed")
+                    && "support_ticket_draft"
+                        .equals(((Map<?, ?>) event.data()).get("toolName")))
+        .singleElement()
+        .satisfies(
+            event -> {
+              String preview = (String) ((Map<?, ?>) event.data()).get("resultPreview");
+              assertThat(preview).hasSize(801).endsWith("…").doesNotContain(longDescription);
+            });
+    assertThat(ticketCount()).isZero();
+  }
+
+  /**
+   * 展示层投影失败不能把一次正常回答变成 task.failed：知识检索返回缺少片段列表的结果时，
+   * 生成页面出处事件会抛运行时异常，但任务仍必须完成，且答案照常返回。
+   */
+  @Test
+  void projectionFailureDoesNotFailTheAnswer() {
+    when(knowledgeSearch.search(anyString(), anyString(), nullable(Integer.class)))
+        .thenReturn(
+            new KnowledgeSearchResponse("付款后未开通", "scope", null, "命中 0 个片段", false, "请创建工单"));
+    var script =
+        new ScriptedModel(
+            List.of(List.of(toolCall("call-1", "knowledge_search", "{\"query\":\"付款后未开通\"}"))),
+            List.of(AiMessage.from("知识库没有可用依据，建议创建工单。")));
+    var events = run(script, "付款后没开通怎么办", user.id());
+
+    assertThat(events).extracting(AgentEvent::type).contains("task.completed").doesNotContain("task.failed");
+    // 投影失败时不发业务投影事件，但工具结果仍回传给模型，答案不丢失。
+    assertThat(events).extracting(AgentEvent::type).doesNotContain("support.knowledge.evidence");
+    assertThat(script.toolResults()).isNotEmpty();
   }
 
   @Test
