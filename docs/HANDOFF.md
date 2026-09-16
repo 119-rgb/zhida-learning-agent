@@ -36,30 +36,32 @@ A 计划 → A 实施+自测 → B 独立审查+复核 → A 修复 → B 复查
 | 订单关联与归属校验（已完成） | Codex | 独立 review agent |
 | 售后知识库改造（已完成） | Codex | 独立 review agent |
 | 售后 Agent 与工具边界（已完成，待审查） | DSH | 待指派（不得由 DSH 自审） |
-| 三端页面与完整演示（计划） | 待定 | 待定 |
+| 三端页面与完整演示（已实现，浏览器验收） | DSH | 待指派 |
 
 ## 当前状态
 
 - **持有者**：`dsh`
-- **上一棒**：模块 1–3 已提交并推送到 `origin/codex/after-sales-tickets`（`14ce5b9`），远端与本地同步。
-- **当前工作**：模块 4 售后 Agent 已实现并自测完成，改动尚未提交。工作区包含模块 4 的全部源码、测试与文档修改。
+- **上一棒**：模块 1–4 已提交并推送；模块 5 页面已提交（`a09c939`），推送待执行。
+- **当前工作**：模块 5 三端页面已实现并用真实浏览器（Playwright + Chromium）验收；接下来是收尾、模块 4/5 独立审查与推送。
 
 ## 交给下一位
 
-- 对象：独立审查 agent（模块 4 不得由 DSH 自审）
+- 对象：独立审查 agent（模块 4 与模块 5 均不得由 DSH 自审）
 - 任务：
-  1. 独立审查模块 4：`SupportTools` 工具集是否真正只读、`SupportToolContext` 身份来源是否可被绕过、`SupportAssistantController` 是否可能被非正式账号调用、草稿与建单是否确实分离、`SupportTicketService.createdBy` 的归属条件、提示注入边界与失败降级。
-  2. 审查完成后由实施方修复，再复查并记录到 `docs/reviews/`。
-  3. 之后进入模块 5：用户端（售后助手、我的工单、工单详情）、客服端（待受理、我的处理、回复与方案）、管理端（分类、分配、知识库管理），并做完整虚构闭环的浏览器验收。
+  1. 独立审查模块 4：`SupportTools` 工具集是否真正只读、`SupportToolContext` 身份来源是否可被绕过、`SupportAssistantController` 是否可能被非正式账号调用、草稿与建单是否确实分离、`createdBy` 与新增 `accounts`/`allOrders` 的归属与角色校验、提示注入边界与失败降级。
+  2. 独立审查模块 5：页面是否存在越权路径（前端隐藏按钮是否被误当作权限）、草稿确认是否可被绕过、SSE 解析是否会漏事件或重复渲染、导航计数与列表是否使用了正确的 `view`。
+  3. 审查完成后由实施方修复，再复查并记录到 `docs/reviews/`。
 - 已执行验收：
   - `mvn clean verify '-Dzhida.build.directory=tmp/module4-final-build'`：124 项、0 失败、0 错误、1 项真实 MySQL 测试跳过；可执行 JAR 生成成功。
-  - HTTP/JWT 用例覆盖未登录 401、游客 403、客服查询草稿接口 403、草稿 requestId 204/200 与用户隔离、Demo 模式 SSE 不建单。
-  - 可编程模型替身覆盖系统指令唯一、工具清单无写工具、他人订单 404、伪造 userId 无效、未确认不建单、知识出处、注入内容不进入系统消息、模型失败后手动流程可用。
-- 未执行验收：真实 DeepSeek/Embedding/Tavily 调用、真实 MySQL、浏览器与 Docker 验收均未执行；模块 5 页面尚未开始。
+  - 真实 MySQL + JWT + 真实 DeepSeek：售后 Agent 会话调用 `support_orders`/`knowledge_search`/`support_ticket`，回答引用真实订单号并明确说明知识库无依据，全程未建单。
+  - 真实 MySQL HTTP 闭环：跨用户订单 404、用户 `view=pending/all` 403、游客 403、匿名 401、非法状态组合 400、并发接单一个成功、7 条审计事件与版本 0–6 一致。
+  - 页面：Playwright + Chromium headless 覆盖三种角色导航、工单列表、状态脊线、审计条数与游客拒绝，除游客场景预期 403 外无异常控制台报错。
+- 未执行验收：跨浏览器与移动端验收、页面用例纳入自动测试、真实 Embedding/Tavily、Docker。
 
 ## 未决问题
 
+- 真实模型不主动调用 `support_ticket_draft`（已观察 4 轮会话），模块 5 因此需要显式入口引导；是否加强工具描述或指令引导待定。
 - 模块 2 旧库升级只在 H2 MySQL 模式验证，真实 MySQL 元数据/ALTER/外键/索引 DDL 仍待验收。
 - 传递依赖含 `langchain4j-reactive-streaming:1.20.0-beta30`，是否钉住待定。
-- 售后助手目前只处理本人订单/工单；客服与管理员的 AI 辅助（例如建议分类、归纳工单）未实现，需要在模块 5 前明确是否需要。
+- 演示库中存在早期遗留的测试账号（非本次创建），演示前建议清理或改用独立数据库。
 - DSH 侧工作区默认文件策略会拒绝写操作，实施类任务需显式放宽文件权限。

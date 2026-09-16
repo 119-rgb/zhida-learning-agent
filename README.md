@@ -1,6 +1,6 @@
 # 知答——智能售后工单平台
 
-知答面向虚构的软件订阅产品，按模块构建售后流程。**模块 1 工单后端、模块 2 产品/模拟订单、模块 3 售后知识库和模块 4 售后 Agent 已实现并通过隔离自动验收**，仍兼容原研究助手。三端页面（模块 5）是后续模块，不能视为已完成。
+知答面向虚构的软件订阅产品，按模块构建售后流程。**模块 1 工单后端、模块 2 产品/模拟订单、模块 3 售后知识库、模块 4 售后 Agent 和模块 5 三端页面已实现**；模块 1–4 通过隔离自动验收，模块 5 页面已用真实浏览器（Playwright + Chromium）验收。原研究助手仍可单独使用。
 
 本项目于 2026-09-15 迁移到 LangChain4j 与 Spring MVC，原有 Spring AI Alibaba / WebFlux / 本地 BGE ONNX 版本留在 Git 历史中。当前代码不需要部署本地推理模型。
 
@@ -58,6 +58,8 @@ LangChain4j StreamingChatModel ↔ 工具调用循环
 - 检索命中返回文件名、PDF 页码或文本片段编号；无可用依据时返回 `evidenceSufficient=false` 和手动创建工单指引。
 - 售后 Agent 使用独立系统指令和只读工具集：能查本人订单、检索知识库、查本人工单和分类，并生成**未确认**工单草稿；没有创建工单、接单、回复、关闭、退款或改订单状态的工具，模型无法改变业务数据。
 - 工具方法不接受 `userId`/`owner`/`role` 参数，身份只取自服务端认证上下文；模型伪造身份或请求查询他人订单会被数据库归属条件拒绝并返回 404。
+- 三端页面在 `/support.html`：用户端（售后助手、我的工单、工单详情）、客服端（待受理队列、我的处理工单）、管理端（分类、分配、产品与订单、知识库）。导航按服务端返回的角色渲染；页面隐藏按钮只是体验优化，权限判断始终在服务端。
+- 工单详情用一条**状态脊线**把四态流程与审计事件放在同一时间轴，每次变更都显示操作人、角色、前后状态、版本号和时间。
 
 ## 启动
 
@@ -118,6 +120,21 @@ MySQL 数据库 `zhida_agent` 需提前创建，应用账户需具备该库读�
 
 数据库表、DDL 权限和角色配置示例见 [docs/SUPPORT_DATABASE.md](docs/SUPPORT_DATABASE.md)。无页面演示的 HTTP 流程见 [docs/SUPPORT_DEMO.md](docs/SUPPORT_DEMO.md)。
 
+## 页面（模块 5，已实现并浏览器验收）
+
+| 页面 | 地址 | 角色 |
+| --- | --- | --- |
+| 研究助手（原功能） | `/` | 任意（可游客） |
+| 售后工作台总览 | `/support.html#overview` | 三种角色 |
+| 售后助手（AI 对话与草稿确认） | `/support.html#assistant` | 普通用户 |
+| 我的工单 / 工单详情 | `/support.html#tickets`、`#ticket/{id}` | 三种角色按权限 |
+| 客服待受理队列 / 我的处理工单 | `/support.html#pending`、`#assigned` | 客服 |
+| 分类管理 / 工单分配 / 产品与订单 / 知识库 | `/support.html#categories`、`#assignment`、`#catalog`、`#knowledge` | 管理员 |
+
+- 页面需要服务端同时启用售后模块、JWT 与数据库；`GET /api/health` 返回 `supportEnabled` 供首页决定是否显示工作台入口。
+- 建单流程严格区分「草稿」与「工单」：助手只能生成不落库的草稿，页面展示后由用户点击确认，才以 `confirmed=true` 提交；提交前先按 `requestId` 查重。
+- 演示步骤、权限拒绝清单和当前限制见 [docs/SUPPORT_WORKBENCH.md](docs/SUPPORT_WORKBENCH.md)。
+
 ## 售后 Agent（模块 4，已实现）
 
 入口：`POST /api/v1/support/assistant/stream`（SSE，请求体与 `/api/v1/research/stream` 相同）。仅在 `zhida.support.enabled=true` 时注册，并要求 JWT 与持久化；未登录返回 401，游客返回 403。
@@ -156,6 +173,8 @@ MySQL 数据库 `zhida_agent` 需提前创建，应用账户需具备该库读�
 | POST/GET /api/v1/support/tickets | 创建和按 `view` 查询工单 |
 | GET /api/v1/support/ticket-drafts/{requestId} | 按草稿 requestId 检查是否已建单（204/200） |
 | POST /api/v1/support/assistant/stream | 售后 Agent SSE 会话；只有查询与草稿工具，不建单 |
+| GET /api/v1/support/accounts?role=… | 管理员读取账号目录（仅 ID、用户名、角色） |
+| GET /api/v1/support/admin/orders | 管理员查看全部模拟订单，仅用于核对演示数据 |
 | GET /api/v1/support/tickets/{id} | 工单、回复和审计事件的一致快照 |
 | POST /api/v1/support/tickets/{id}/comments、claim、replies、solution、reopen、confirm、assign | 对应用户、客服、管理员操作；必需 expectedVersion |
 
