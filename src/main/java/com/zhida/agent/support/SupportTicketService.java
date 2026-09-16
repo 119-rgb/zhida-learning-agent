@@ -220,6 +220,24 @@ VALUES (?,?,?,?,?,?,?,?,?)
   }
 
   /**
+   * 查询指定角色的账号列表，供管理员分配工单或选择演示订单归属用户。
+   *
+   * <p>只有管理员可以查看账号目录；角色名必须是受支持的角色，非法角色返回 400 而不是空列表。
+   * 返回内容由 {@link SupportActorResolver.AccountSummary} 限定为 ID、用户名和角色。
+   */
+  public List<SupportActorResolver.AccountSummary> accounts(Actor supplied, String roleName) {
+    Actor actor = refresh(supplied);
+    role(actor, ADMIN);
+    SupportRole target;
+    try {
+      target = SupportRole.valueOf(roleName == null ? "" : roleName.trim());
+    } catch (IllegalArgumentException error) {
+      throw error(HttpStatus.BAD_REQUEST, "未知角色");
+    }
+    return actors.accountsByRole(target);
+  }
+
+  /**
    * 按 requestId 查询本人已创建的工单，供页面在确认建单前检测重复提交。
    *
    * <p>只读接口，因此不要求 expectedVersion；查询始终带 user_id 条件，其他用户的工单即使

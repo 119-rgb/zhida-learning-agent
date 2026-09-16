@@ -59,6 +59,17 @@ public class SupportOrderController {
     return service.myOrder(actors.resolve(principal), id);
   }
 
+  /**
+   * 管理员核对演示数据的只读视图：返回全部模拟订单。
+   *
+   * <p>这是唯一不带 owner 条件的订单查询，服务层会再次确认管理员角色；普通用户与客服
+   * 调用返回 403。它只用于展示，不能作为业务规则依据，也没有任何状态修改能力。
+   */
+  @GetMapping("/admin/orders")
+  public List<Order> allOrders(Principal principal) {
+    return service.allOrders(actors.resolve(principal));
+  }
+
   @PostMapping("/admin/orders")
   @ResponseStatus(HttpStatus.CREATED)
   public Order createOrder(Principal principal, @Valid @RequestBody OrderRequest request) {

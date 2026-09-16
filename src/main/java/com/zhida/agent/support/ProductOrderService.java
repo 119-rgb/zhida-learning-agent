@@ -149,6 +149,18 @@ public class ProductOrderService {
     return ownedOrder(actor.id(), orderId);
   }
 
+  /**
+   * 管理员核对演示数据用：返回全部模拟订单。
+   *
+   * <p>这是唯一不带 owner 条件的订单查询，角色校验必须在服务层完成，不能依赖页面隐藏入口；
+   * 普通用户与客服调用都会得到 403。
+   */
+  public List<Order> allOrders(Actor supplied) {
+    Actor actor = refresh(supplied);
+    requireRole(actor, ADMIN);
+    return repository.allOrders();
+  }
+
   /** 工单创建事务调用此方法；404 同时表示不存在或不归属，防止探测其他用户订单。 */
   Order ownedOrder(String ownerId, String orderId) {
     String id = text(orderId, 36, "订单");

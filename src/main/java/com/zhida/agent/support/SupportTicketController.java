@@ -83,6 +83,16 @@ public class SupportTicketController {
             r.confirmed()));
   }
 
+  /**
+   * 管理员读取账号目录：分配工单需要客服列表，演示造数需要普通用户列表。
+   * 只返回 ID、用户名和角色，不返回密码哈希；非管理员调用返回 403。
+   */
+  @GetMapping("/accounts")
+  public List<SupportActorResolver.AccountSummary> accounts(
+      Principal p, @RequestParam String role) {
+    return service.accounts(actors.resolve(p), role);
+  }
+
   @GetMapping("/tickets")
   public List<Ticket> list(Principal p, @RequestParam(defaultValue = "mine") String view) {
     return service.list(actors.resolve(p), view);

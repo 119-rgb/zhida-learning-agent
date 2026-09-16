@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="知答售后工作台：提交售后问题、跟踪处理进度，客服与管理员在此处理工单。">
+    <title>知答 · 售后工作台</title>
+    <link rel="stylesheet" href="/support.css">
+</head>
+<body>
+<div id="authModal" class="auth-modal" hidden aria-hidden="true">
+    <section class="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="authTitle" aria-describedby="authDescription">
+        <div class="auth-brand"><span class="brand-mark" aria-hidden="true">知</span><span>知答售后</span></div>
+        <div class="auth-heading">
+            <h1 id="authTitle">登录后进入售后工作台</h1>
+            <p id="authDescription">售后问题、工单进度和处理记录都与你的账号绑定，必须登录后使用。</p>
+        </div>
+        <p id="authStatus" class="auth-status" role="status" aria-live="polite">请使用已有账号登录。</p>
+        <form id="authForm">
+            <label class="field-label" for="username">用户名</label>
+            <input id="username" placeholder="3～32 位字母、数字或下划线" pattern="[A-Za-z0-9_]{3,32}" autocomplete="username" required>
+            <label class="field-label" for="password">密码</label>
+            <input id="password" type="password" placeholder="至少 8 个字符" minlength="8" maxlength="64" autocomplete="current-password" required>
+            <div class="auth-actions">
+                <button class="button primary" type="submit" value="login">登录</button>
+                <button class="button secondary" type="submit" value="register">注册新账号</button>
+            </div>
+        </form>
+        <p class="auth-note">注册账号默认为普通用户；客服与管理员角色由数据库配置。游客不能进入售后业务。</p>
+    </section>
+</div>
+
+<div id="shell" class="shell" inert aria-hidden="true">
+    <aside id="sidebar" class="sidebar">
+        <div class="brand-row">
+            <span class="brand-mark" aria-hidden="true">知</span>
+            <div><strong>知答售后</strong><span id="brandRole">工作台</span></div>
+            <button id="closeSidebar" class="icon-button" type="button" aria-label="关闭导航">×</button>
+        </div>
+
+        <div id="accountCard" class="account-card">
+            <div class="account-line">
+                <span id="accountName" class="account-name">未登录</span>
+                <span id="accountRole" class="role-chip">—</span>
+            </div>
+            <p id="accountHint" class="account-hint">登录后查看售后内容</p>
+            <button id="logout" class="button ghost small" type="button">退出登录</button>
+        </div>
+
+        <nav id="nav" class="nav" aria-label="功能导航"></nav>
+
+        <div class="sidebar-footer">
+            <div class="service-state"><span id="modeDot" class="status-dot"></span><span id="modeBadge">正在检查服务</span></div>
+            <a class="back-link" href="/">返回研究助手</a>
+        </div>
+    </aside>
+
+    <button id="sidebarOverlay" class="sidebar-overlay" type="button" aria-label="关闭导航"></button>
+
+    <section class="workspace">
+        <header class="topbar">
+            <button id="openSidebar" class="icon-button menu-button" type="button" aria-label="打开导航">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+            </button>
+            <div class="topbar-title"><strong id="viewTitle">售后工作台</strong><span id="viewSubtitle">正在加载</span></div>
+            <div class="topbar-actions">
+                <span id="publicKnowledgeChip" class="chip" hidden>公共知识库</span>
+            </div>
+        </header>
+
+        <main id="view" class="view" aria-live="polite"></main>
+    </section>
+</div>
+
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+<!-- 工单草稿确认：模型只能生成草稿，建单必须由用户在这里明确确认。 -->
+<div id="draftModal" class="auth-modal" hidden aria-hidden="true">
+    <section class="auth-dialog wide" role="dialog" aria-modal="true" aria-labelledby="draftTitle">
+        <div class="auth-heading">
+            <h1 id="draftTitle">确认创建工单</h1>
+            <p>以下是助手整理的草稿，尚未创建工单。确认后才会提交给客服处理。</p>
+        </div>
+        <div id="draftBody" class="draft-body"></div>
+        <p id="draftStatus" class="auth-status" role="status" aria-live="polite"></p>
+        <div class="auth-actions">
+            <button id="draftConfirm" class="button primary" type="button">确认创建工单</button>
+            <button id="draftCancel" class="button secondary" type="button">暂不创建</button>
+        </div>
+    </section>
+</div>
+
+<script src="/support.js"></script>
+</body>
+</html>

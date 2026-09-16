@@ -151,6 +151,16 @@ public class ProductOrderRepository {
         ownerId);
   }
 
+  /**
+   * 管理端演示数据视图：返回全部模拟订单，仅用于管理员核对演示数据是否就绪。
+   *
+   * <p>调用方必须先确认管理员角色。这里没有 owner 条件，因此绝不能用于普通用户查询路径；
+   * 普通用户只能通过 {@link #orders(String)} 读取本人订单。
+   */
+  List<Order> allOrders() {
+    return jdbc.query(ORDER_SELECT + " ORDER BY o.created_at DESC,o.id LIMIT 100", ORDER);
+  }
+
   Optional<Order> byRequest(String actorId, String requestId) {
     return jdbc
         .query(

@@ -616,6 +616,9 @@ async function checkHealth() {
         const response = await fetch('/api/health');
         const health = await response.json();
         document.querySelector('#searchCapability').hidden = !health.searchEnabled;
+        // 只有售后模块启用时才显示工作台入口；该入口本身不构成权限校验，售后接口仍会独立鉴权。
+        const supportLink = document.querySelector('#supportLink');
+        if (supportLink) supportLink.hidden = !health.supportEnabled;
         modeDot.className = `status-dot ${health.aiEnabled ? 'online' : 'demo'}`;
         if (!health.aiEnabled) modeBadge.textContent = '演示模式';
         else if (health.searchEnabled) modeBadge.textContent = 'Agent 与联网搜索可用';

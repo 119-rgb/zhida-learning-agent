@@ -101,6 +101,35 @@ button:active { transform: translateY(1px); }
     font-size: 14px; font-weight: 650; cursor: pointer;
 }
 .new-chat-button:hover { background: #e4eaff; }
+
+/* 售后工作台入口：仅在售后模块启用时由 app.js 显示，与研究助手共用同一侧栏视觉。 */
+.support-entry {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 8px;
+    padding: 9px 11px;
+    border: 1px solid #d8e0ff;
+    border-radius: 11px;
+    color: var(--ink);
+    background: var(--accent-soft);
+    text-decoration: none;
+}
+.support-entry:hover { border-color: #b9c4ff; background: #e6ecff; }
+.support-entry[hidden] { display: none; }
+.support-entry-mark {
+    display: grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 8px;
+    color: #fff;
+    background: var(--accent);
+    font-size: 13px;
+    font-weight: 800;
+}
+.support-entry strong { display: block; font-size: 13.5px; }
+.support-entry small { display: block; color: var(--muted); font-size: 12px; }
 .conversation-nav { margin-top: 22px; }
 .section-label { display: block; margin: 0 8px 8px; color: var(--soft-muted); font-size: 12px; font-weight: 650; }
 .conversation-item {

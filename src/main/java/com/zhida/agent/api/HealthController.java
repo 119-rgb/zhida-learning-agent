@@ -13,8 +13,18 @@ public class HealthController {
 
   private final ZhidaProperties properties;
 
-  public HealthController(ZhidaProperties properties) {
+  /**
+   * 售后模块是否启用。健康接口把它暴露出来，页面据此决定是显示「售后工作台」入口，
+   * 还是提示需要以启用售后、JWT 与数据库的模式启动。页面入口本身不构成权限校验。
+   */
+  private final boolean supportEnabled;
+
+  public HealthController(
+      ZhidaProperties properties,
+      @org.springframework.beans.factory.annotation.Value("${zhida.support.enabled:false}")
+          boolean supportEnabled) {
     this.properties = properties;
+    this.supportEnabled = supportEnabled;
   }
 
   @GetMapping("/health")
@@ -33,6 +43,8 @@ public class HealthController {
             && StringUtils.hasText(properties.getRag().getEmbeddingApiKey())
             && StringUtils.hasText(properties.getRag().getEmbeddingModel()),
         "searchEnabled",
-        StringUtils.hasText(properties.getSearch().getTavilyApiKey()));
+        StringUtils.hasText(properties.getSearch().getTavilyApiKey()),
+        "supportEnabled",
+        supportEnabled);
   }
 }
