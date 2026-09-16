@@ -18,7 +18,7 @@
 
 ## 本次 Git 与隐私
 
-开发分支 codex/after-sales-tickets，身份已核实为 GitHub 昵称与 noreply。原 AGENTS.md 隐私条款保留，追加分阶段审查与注释约定；日志/产物/私人 data/archive 不发布。中文注释及独立审查记录见 reviews/2026-09-16-module-1.md。历史清理已获用户专项授权；替代历史与最终源码树核对完成后，经全历史检查及系统 Git 登录再执行远端更新。处理方案见 PRIVACY_REVIEW.md，结果以实际远端引用复核为准。
+开发分支 codex/after-sales-tickets，身份已核实为 GitHub 昵称与 noreply。原 AGENTS.md 隐私条款保留，追加分阶段审查与注释约定；日志/产物/私人 data/archive 不发布。中文注释及独立审查记录见 reviews/2026-09-16-module-1.md。历史清理已获用户专项授权并完成远端原子更新；推送后重新扫描三条远端分支的 6 个可达提交、203 个不同历史文件对象，既定隐私模式无命中，本地 archive 未发布。处理与限制见 PRIVACY_REVIEW.md。
 
 ## 2026-09-15 框架迁移：历史记录
 
@@ -56,4 +56,4 @@ Java 17 / Spring Boot 3.5.7 / Spring MVC / LangChain4j 1.20.0 / PDFBox 3.0.5 / M
 
 ## Git
 
-现有GitHub仓库为119-rgb/zhida-learning-agent，本地origin已关联并fetch；两边原有内容与历史已检查。迁移分支保留远程main祖先，未强推。未发布历史中的实名提交身份改为GitHub别名，原始本地历史保留在archive分支；不推送archive分支。以实际远程ref与本地HEAD对齐验证作为发布完成证据。
+现有 GitHub 仓库为 119-rgb/zhida-learning-agent，本地 origin 已关联并 fetch。`main`、`codex/langchain4j-mvc` 和 `codex/after-sales-tickets` 已更新为清理历史；提交身份统一为核实的 GitHub 昵称与 noreply。原始本地历史仅保留在 archive 分支且未发布；远端引用和重新扫描结果已复核。
