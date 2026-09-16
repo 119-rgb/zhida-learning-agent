@@ -15,6 +15,14 @@ public class RequestRateFilter extends OncePerRequestFilter {
 
   private final ConcurrentHashMap<String, Window> windows = new ConcurrentHashMap<>();
 
+  /**
+   * 仅供自动测试在用例之间清空计数窗口。生产限流规则（每分钟 30 次 POST、认证接口 10 次）
+   * 和键的构成都不受该方法影响；业务代码没有调用点。
+   */
+  public void resetForTests() {
+    windows.clear();
+  }
+
   @Override
   protected void doFilterInternal(
       HttpServletRequest request, HttpServletResponse response, FilterChain chain)

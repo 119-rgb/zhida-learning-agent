@@ -7,6 +7,8 @@ import com.zhida.agent.api.dto.ResearchRequest;
 import com.zhida.agent.common.config.ZhidaProperties;
 import com.zhida.agent.knowledge.KnowledgeBaseAccessService;
 import com.zhida.agent.observability.*;
+import com.zhida.agent.support.SupportAgentInstruction;
+import com.zhida.agent.support.SupportTools;
 import com.zhida.agent.tool.ResearchTools;
 import dev.langchain4j.agent.tool.*;
 import dev.langchain4j.data.message.*;
@@ -33,6 +35,13 @@ public class ResearchOrchestrator {
   private final ResearchTools tools;
   private final ObservableToolInterceptor toolInterceptor;
   private final ModelUsageInterceptor usage;
+
+  /**
+   * 售后工具集只在售后模块启用时存在。这里用可选字段注入而不是构造参数，原因是构造参数会
+   * 强制所有测试和旧部署同时提供该 Bean；售后模式自身仍会校验工具集是否存在。
+   */
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  private SupportTools supportTools;
   // Bounded provider/tool work: cancelled remote I/O may take time to unwind.
   private final ExecutorService calls =
       new ThreadPoolExecutor(
@@ -82,6 +91,10 @@ public class ResearchOrchestrator {
   }
 
   public ResearchSession prepare(ResearchRequest request, String owner) {
+    return prepare(request, owner, AgentMode.RESEARCH);
+  }
+
+  public ResearchSession prepare(ResearchRequest request, String owner, AgentMode mode) {
     String id = normalize(request.conversationId());
     String key = owner + ":" + id;
     if (!running.add(key)) throw new ResponseStatusException(HttpStatus.CONFLICT, "这个会话正在回答，请稍后再试");
@@ -94,7 +107,8 @@ public class ResearchOrchestrator {
           context,
           request.requestId() == null ? UUID.randomUUID().toString() : request.requestId(),
           owner,
-          key);
+          key,
+          mode);
     } catch (RuntimeException error) {
       running.remove(key);
       throw error;
@@ -103,13 +117,23 @@ public class ResearchOrchestrator {
 
   public ResearchSession prepareWithContext(
       ResearchRequest request, List<ChatMessage> context, String taskId, String owner) {
-    return new Session(request, List.copyOf(context), taskId, owner, null);
+    return prepareWithContext(request, context, taskId, owner, AgentMode.RESEARCH);
+  }
+
+  public ResearchSession prepareWithContext(
+      ResearchRequest request,
+      List<ChatMessage> context,
+      String taskId,
+      String owner,
+      AgentMode mode) {
+    return new Session(request, List.copyOf(context), taskId, owner, null, mode);
   }
 
   private final class Session implements ResearchSession {
     private final ResearchRequest request;
     private final List<ChatMessage> context;
-    private final String taskId, scope, memoryKey;
+    private final String taskId, scope, owner, memoryKey;
+    private final AgentMode mode;
     private final ResearchPlan plan;
     private final BlockingQueue<Object> queue = new ArrayBlockingQueue<>(1024);
     private Consumer<AgentEvent> sink;
@@ -128,11 +152,14 @@ public class ResearchOrchestrator {
         List<ChatMessage> context,
         String taskId,
         String owner,
-        String memoryKey) {
+        String memoryKey,
+        AgentMode mode) {
       this.request = request;
       this.context = context;
       this.taskId = taskId;
+      this.owner = owner;
       this.memoryKey = memoryKey;
+      this.mode = mode;
       this.scope = access.resolve(owner, request.knowledgeBaseId());
       this.plan = planner.plan(request.message());
       this.deadline =
@@ -268,19 +295,21 @@ public class ResearchOrchestrator {
 
     private void runModel(StreamingChatModel model) throws Exception {
       var messages = new ArrayList<ChatMessage>();
-      messages.add(SystemMessage.from(ResearchAgentConfiguration.INSTRUCTION));
+      messages.add(SystemMessage.from(instruction()));
       messages.addAll(context);
+      Object toolHolder = toolHolder();
       var specs =
-          tools == null
+          toolHolder == null
               ? List.<ToolSpecification>of()
-              : ToolSpecifications.toolSpecificationsFrom(tools);
+              : ToolSpecifications.toolSpecificationsFrom(toolHolder);
       Map<String, DefaultToolExecutor> executors = new HashMap<>();
-      if (tools != null) {
-        for (var method : ResearchTools.class.getMethods()) {
+      if (toolHolder != null) {
+        // 执行器按“工具所属对象自己的方法”建立，避免把另一个工具集的方法名混进来。
+        for (var method : toolHolder.getClass().getMethods()) {
           if (method.isAnnotationPresent(Tool.class)) {
             executors.put(
                 ToolSpecifications.toolSpecificationFrom(method).name(),
-                new DefaultToolExecutor(tools, method));
+                new DefaultToolExecutor(toolHolder, method));
           }
         }
       }
@@ -377,6 +406,7 @@ public class ResearchOrchestrator {
                       toolInterceptor.execute(
                           taskId,
                           scope,
+                          owner,
                           request,
                           () -> {
                             DefaultToolExecutor executor = executors.get(request.name());
@@ -411,6 +441,25 @@ public class ResearchOrchestrator {
           messages.add(ToolExecutionResultMessage.from(request, text));
         }
       }
+    }
+
+    /** 系统指令按服务端模式选择；模型和客户端都无法替换这里的规则来源。 */
+    private String instruction() {
+      return mode == AgentMode.SUPPORT
+          ? SupportAgentInstruction.INSTRUCTION
+          : ResearchAgentConfiguration.INSTRUCTION;
+    }
+
+    /**
+     * 返回本次会话绑定的工具对象。售后模式必须拿到售后工具集，缺失时直接失败而不是回退到
+     * 研究助手工具集，否则售后入口可能意外获得联网搜索等不该有的能力。
+     */
+    private Object toolHolder() {
+      if (mode == AgentMode.SUPPORT) {
+        if (supportTools == null) throw new IllegalStateException("售后工具集未启用");
+        return supportTools;
+      }
+      return tools;
     }
 
     private void emitTrace(ToolTrace trace) {

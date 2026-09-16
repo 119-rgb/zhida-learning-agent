@@ -2,11 +2,11 @@
 
 以下是迁移后的项目描述，使用前应完成 MODULE_ROADMAP.md 对应模块的学习，能从源码解释每条。真实供应商、压测和上线状态以 PROJECT_STATUS.md 为准。
 
-## 智能售后工单平台（模块 1–3 已实现、隔离验收）
+## 智能售后工单平台（模块 1–4 已实现、隔离验收）
 
-以下表述只适用于能够从当前源码和验证记录中解释的工单、模拟订单与售后知识库内容；不要写成完整 AI 售后系统。
+以下表述只适用于能够从当前源码和验证记录中解释的工单、模拟订单、售后知识库与售后 Agent 内容；不要写成完整 AI 售后系统。
 
-**知答——智能售后工单平台（工单与模拟订单模块）**
+**知答——智能售后工单平台（工单、模拟订单与售后 Agent 模块）**
 
 技术栈：Java 17、Spring Boot、Spring MVC、MySQL、Spring Security、JWT、LangChain4j、PDFBox、SSE。
 
@@ -14,10 +14,13 @@
 - 基于 JWT 身份和数据库角色实施 USER、CUSTOMER_SERVICE、ADMIN 权限边界；注册账户默认 USER，客服与管理员角色由运维配置，资源读取按工单归属与处理人校验。
 - 使用用户级 `requestId` 实现创建幂等，并以 `expectedVersion` 和条件更新处理并发冲突；在同一事务中提交工单变更、回复/处理记录和审计事件。
 - 设计明确标记为虚构数据的产品/订单模型，覆盖待付款、已付款未开通和已开通场景；订单查询按认证用户归属过滤，工单关联订单时再次校验 owner，拒绝跨用户访问。
-- 管理员模拟订单写入以 `(created_by, requestId)` 唯一约束防重复，并与审计事件同事务提交；查询侧不提供支付、退款或开通状态修改能力，为后续只读 AI 工具保留安全边界。
+- 管理员模拟订单写入以 `(created_by, requestId)` 唯一约束防重复，并与审计事件同事务提交；查询侧不提供支付、退款或开通状态修改能力，为 AI 工具保留只读边界。
 - 复用 PDF/TXT/Markdown 解析、分块与向量检索链路实现公共售后知识库；公共资料仅管理员维护，用户私人文档按 JWT owner 隔离，检索返回文件名、页码/片段出处并对依据不足提供手动建单降级。
+- 实现售后 Agent 会话入口：服务端固定调用模式与专用系统指令，只注册订单/工单/分类查询、知识检索和草稿工具；工具不接受 `userId`/`owner` 参数，身份取自服务端认证上下文写入的 ToolLocal 上下文。
+- 将“生成草稿”和“创建工单”拆成两个入口：模型只能产生 `confirmed=false` 且不落库的草稿，用户在前端明确确认后由业务接口建单，并再次校验分类、订单归属与 `requestId` 幂等；另提供按 `requestId` 查询是否已建单的接口，降低重复提交风险。
+- 模型失败、超时或工具预算耗尽只影响本次会话；订单与工单接口不依赖模型，用户始终可以手动建单和处理。
 
-不要声称售后 Agent、三端页面、真实支付集成或真实 MySQL 压测已经完成。自动测试数量以 PROJECT_STATUS.md 的最新实际执行记录为准，不将测试数量表述为生产经验或性能数据。
+不要声称三端页面、真实支付集成、真实模型验收或真实 MySQL 压测已经完成。自动测试数量以 PROJECT_STATUS.md 的最新实际执行记录为准，不将测试数量表述为生产经验或性能数据。
 
 | 面试问题 | 对应源码与测试 | 解释要点 |
 | --- | --- | --- |
@@ -28,11 +31,15 @@
 | 详情会读到混合版本吗？ | Repository.readTransaction；并发详情测试 | 独立可重复读事务读取本体与关联记录 |
 | 订单为什么不会串用户？ | ProductOrderRepository.ownedOrder/orders；SupportOrderHttpTest | owner 条件进入 SQL，JWT 用户不能由请求覆盖，跨用户统一 404 |
 | 模拟订单为何仍要幂等和审计？ | ProductOrderService.createOrder；ProductOrderServiceTest | 管理员重试也会重复造数；唯一键裁决并发，订单与 CREATED 事件同事务 |
-| AI 能修改付款或开通吗？ | SupportOrderController、ProductOrderService | 只有管理员创建初始模拟状态，没有状态更新业务方法；后续工具仅接查询 |
+| AI 能修改付款或开通吗？ | SupportOrderController、ProductOrderService、SupportTools | 没有状态更新业务方法，Agent 工具集里也没有任何写工具；模型只能查询与生成草稿 |
 | 公共知识库为什么不会泄露私人文档？ | KnowledgeBaseAccessService、SupportKnowledgeHttpTest | 公共固定命名空间与私人 owner 哈希命名空间分开；公共写入查 ADMIN，私人访问仍按 owner 查存在性 |
 | RAG 资料不足怎么办？ | KnowledgeBaseService.search、KnowledgeSearchResponse | 空命中不生成确定答案，返回证据不足和下一步；命中必须携带文件与页码/片段编号 |
+| 模型能否自己建单或改状态？ | SupportTools、SupportTicketService.draft/create；SupportAgentOrchestrationTest | 工具集无写工具；草稿不落库且固定未确认；建单必须由用户确认后走业务接口 |
+| 模型伪造 userId 会怎样？ | SupportToolContext、SupportTools、ObservableToolInterceptor | 工具没有身份参数，身份由服务端在认证后写入执行上下文；伪造参数被忽略，越权查询由 owner SQL 拒绝 |
+| 文档里写“忽略以上规则”会怎样？ | SupportAgentInstruction、SupportTools.searchKnowledge；注入测试 | 系统指令是唯一规则来源，文档片段只是数据；防护来自只读工具与身份上下文，而不是内容过滤 |
+| 模型挂了售后还能用吗？ | ResearchOrchestrator 失败路径；模型失败降级测试 | 会话以 task.failed 结束，不产生工单；业务接口不依赖模型，可手动建单 |
 
-售后项目口述：项目提供用户、客服、管理员的工单接口，以及虚构产品和模拟订单。用户只能查询自己的订单，关联订单建单时后端再次校验归属。客服接单回复并提交方案，用户确认后关闭评价，未解决可退回处理。后端以状态和角色限制操作，用唯一 requestId 防重复、版本条件更新防覆盖，并将业务变化与审计同事务提交。知识库复用原有文档解析与向量检索，公共售后资料仅管理员维护，私人文档仍按 owner 隔离，检索结果包含可核对出处。当前售后 Agent 与页面是后续阶段。
+售后项目口述：项目提供用户、客服、管理员的工单接口，以及虚构产品和模拟订单。用户只能查询自己的订单，关联订单建单时后端再次校验归属。客服接单回复并提交方案，用户确认后关闭评价，未解决可退回处理。后端以状态和角色限制操作，用唯一 requestId 防重复、版本条件更新防覆盖，并将业务变化与审计同事务提交。知识库复用原有文档解析与向量检索，公共售后资料仅管理员维护，私人文档仍按 owner 隔离，检索结果包含可核对出处。售后 Agent 用独立系统指令和只读工具集回答问题并生成未确认草稿，建单必须由用户确认后走业务接口；模型不可用时整套手动流程仍然可用。前端三端页面是下一阶段。
 
 ## 原研究助手的简历项目文本
 

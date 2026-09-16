@@ -1,6 +1,6 @@
 # 知答——智能售后工单平台
 
-知答面向虚构的软件订阅产品，按模块构建售后流程。**模块 1 工单后端、模块 2 产品/模拟订单和模块 3 售后知识库已实现并通过隔离自动验收**，仍兼容原研究助手。售后 Agent 和三端页面是后续模块，不能视为已完成。
+知答面向虚构的软件订阅产品，按模块构建售后流程。**模块 1 工单后端、模块 2 产品/模拟订单、模块 3 售后知识库和模块 4 售后 Agent 已实现并通过隔离自动验收**，仍兼容原研究助手。三端页面（模块 5）是后续模块，不能视为已完成。
 
 本项目于 2026-09-15 迁移到 LangChain4j 与 Spring MVC，原有 Spring AI Alibaba / WebFlux / 本地 BGE ONNX 版本留在 Git 历史中。当前代码不需要部署本地推理模型。
 
@@ -8,7 +8,20 @@
 
 售后核心业务不依赖模型：HTTP 请求 → JWT 验证 → SupportActorResolver 数据库角色 → ProductOrderService / SupportTicketService 权限、归属、状态和参数校验 → 模拟订单或工单/回复/审计同事务 → MySQL（测试为隔离 H2）。详情使用独立的可重复读事务。
 
-以下为兼容保留的研究助手链路，尚未改成售后 Agent：
+售后 Agent 在核心业务之上增加一条“只读查询 + 草稿”链路，它与核心业务共用同一套 SSE、任务和审计能力：
+
+```text
+POST /api/v1/support/assistant/stream（服务端固定为 SUPPORT 模式）
+  ↓ JWT Principal → OwnerResolver → SupportActorResolver 拒绝游客、读取数据库角色
+  ↓ SupportAgentInstruction（售后专用系统指令，客户端无法替换）+ SupportTools（只读工具集）
+  ↓ LangChain4j 工具循环：knowledge_search / support_order(s) / support_ticket(s) / support_categories
+  ↓ support_ticket_draft 只返回未确认草稿（含后端 requestId），不写库
+SSE 事件（task.started…answer.delta…task.completed 或 task.failed）
+  ↓ 用户在前端核对草稿并明确确认
+POST /api/v1/support/tickets（confirmed=true）→ 重新校验分类、订单归属与 requestId 幂等后建单
+```
+
+以下为兼容保留的研究助手链路，使用通用指令与包含联网搜索的 `ResearchTools`：
 
 ```text
 浏览器页面
@@ -43,6 +56,8 @@ LangChain4j StreamingChatModel ↔ 工具调用循环
 - 售后模块提供明确标记为模拟数据的产品与订单，覆盖待付款、已付款未开通、已开通；本人订单查询和工单关联均在服务端校验 owner。
 - 固定公共售后知识库 `product-support` 由管理员维护，正式账号可检索；用户私人知识库继续按 JWT owner 隔离，管理员不能越权读取。
 - 检索命中返回文件名、PDF 页码或文本片段编号；无可用依据时返回 `evidenceSufficient=false` 和手动创建工单指引。
+- 售后 Agent 使用独立系统指令和只读工具集：能查本人订单、检索知识库、查本人工单和分类，并生成**未确认**工单草稿；没有创建工单、接单、回复、关闭、退款或改订单状态的工具，模型无法改变业务数据。
+- 工具方法不接受 `userId`/`owner`/`role` 参数，身份只取自服务端认证上下文；模型伪造身份或请求查询他人订单会被数据库归属条件拒绝并返回 404。
 
 ## 启动
 
@@ -103,6 +118,17 @@ MySQL 数据库 `zhida_agent` 需提前创建，应用账户需具备该库读�
 
 数据库表、DDL 权限和角色配置示例见 [docs/SUPPORT_DATABASE.md](docs/SUPPORT_DATABASE.md)。无页面演示的 HTTP 流程见 [docs/SUPPORT_DEMO.md](docs/SUPPORT_DEMO.md)。
 
+## 售后 Agent（模块 4，已实现）
+
+入口：`POST /api/v1/support/assistant/stream`（SSE，请求体与 `/api/v1/research/stream` 相同）。仅在 `zhida.support.enabled=true` 时注册，并要求 JWT 与持久化；未登录返回 401，游客返回 403。
+
+- 模式由服务端固定为 `SUPPORT`，客户端不能声明模式，因此无法让售后会话改用研究助手的通用指令或联网工具。
+- 系统指令为 `SupportAgentInstruction`（售后专用），`SupportTools` 只注册 8 个工具：`current_date`、`knowledge_search`、`support_orders`、`support_order`、`support_tickets`、`support_ticket`、`support_categories`、`support_ticket_draft`。工具清单中没有 create/close/refund/payment/activate/assign/claim。
+- 草稿包含标题、问题描述、分类、关联订单和后端生成的 `requestId`，并固定 `confirmed=false`；草稿不写数据库。只有用户在前端明确确认后，`POST /api/v1/support/tickets`（`confirmed=true`）才会建单，届时重新校验分类启用、订单归属和 `requestId` 幂等。
+- `GET /api/v1/support/ticket-drafts/{requestId}` 返回 204（尚未建单）或 200 与原工单（该 requestId 已使用），页面据此避免重复建单；查询只作用于当前用户。
+- 模型失败、超时或工具预算耗尽只影响这次会话，用户仍可通过工单接口手动建单和处理；工具调用记录、事件序号、取消、超时和用量统计沿用现有 `ToolTracePublisher` / `TokenUsage` 链路。
+- 知识库片段、用户输入和工具返回内容都作为数据处理，`SupportAgentInstruction` 是唯一规则来源；文档里出现“忽略以上规则”只作为片段内容回传，不会成为新的系统指令。
+
 ## 常用接口
 
 | 接口 | 用途 |
@@ -128,6 +154,8 @@ MySQL 数据库 `zhida_agent` 需提前创建，应用账户需具备该库读�
 | GET /api/v1/support/orders；GET /orders/{id} | 普通用户查询自己的模拟订单 |
 | POST /api/v1/support/admin/orders | 管理员幂等录入模拟订单；不连接真实支付 |
 | POST/GET /api/v1/support/tickets | 创建和按 `view` 查询工单 |
+| GET /api/v1/support/ticket-drafts/{requestId} | 按草稿 requestId 检查是否已建单（204/200） |
+| POST /api/v1/support/assistant/stream | 售后 Agent SSE 会话；只有查询与草稿工具，不建单 |
 | GET /api/v1/support/tickets/{id} | 工单、回复和审计事件的一致快照 |
 | POST /api/v1/support/tickets/{id}/comments、claim、replies、solution、reopen、confirm、assign | 对应用户、客服、管理员操作；必需 expectedVersion |
 
@@ -139,7 +167,7 @@ SSE 事件包括 task.started、plan.created、step.started、answer.started、t
 
 ## 测试与交付
 
-模块 3 全量回归：113 项、0 失败、0 错误、1 项真实 MySQL 测试跳过；模块 3 新增 5 项，可执行 JAR 已打包。旧演示占用 target JAR 时可使用独立目录：`mvn clean verify '-Dzhida.build.directory=tmp/module3-final-build'`。日志、构建产物和私人文件不入 Git。
+模块 4 全量回归：`mvn clean verify '-Dzhida.build.directory=tmp/module4-final-build'` 为 124 项、0 失败、0 错误、1 项真实 MySQL 测试跳过，可执行 JAR 生成成功。模块 4 新增 9 项（`SupportAgentOrchestrationTest` 6 项、`SupportAssistantHttpTest` 2 项、`SupportTicketHttpTest` 新增 1 项）。使用独立目录可避开旧演示 JAR 的文件锁，默认构建仍为 target。日志、构建产物和私人文件不入 Git。
 
 ```powershell
 mvn clean test
@@ -152,7 +180,7 @@ mvn package
 
 简历项目说明及源码面试地图见 [docs/RESUME_PROJECT.md](docs/RESUME_PROJECT.md)。完整开发要求见 [DEVELOPMENT_SPEC.md](DEVELOPMENT_SPEC.md)。
 
-分阶段独立审查与修复记录见 [docs/reviews](docs/reviews/README.md)，模块 1–3 均已完成独立审查和修复复查。工单注释可从 SupportTicketService 开始，订单边界从 ProductOrderService 与 ProductOrderRepository 开始，知识库边界从 KnowledgeBaseAccessService 开始。
+分阶段独立审查与修复记录见 [docs/reviews](docs/reviews/README.md)，模块 1–3 均已完成独立审查和修复复查；模块 4 的独立审查尚待另一位审查者完成，当前只有实现者自测记录（见 [docs/reviews/2026-09-16-module-4.md](docs/reviews/2026-09-16-module-4.md)）。工单注释可从 SupportTicketService 开始，订单边界从 ProductOrderService 与 ProductOrderRepository 开始，知识库边界从 KnowledgeBaseAccessService 开始，Agent 边界从 SupportAssistantController、SupportAgentInstruction 与 SupportTools 开始。
 
 ## 来源
 

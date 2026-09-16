@@ -45,6 +45,20 @@ class SupportTicketHttpTest {
 
   @Autowired TestRestTemplate http;
   @Autowired HikariDataSource source;
+
+  /**
+   * HTTP 限流过滤器按“来源地址 + 分钟”统计 POST 次数，默认上限 30。全部 HTTP 测试共用同一个
+   * 上下文与来源地址，若不重置，用例数量增加后会互相触发 429，掩盖真正的业务断言。
+   * 这里只在测试中清空计数窗口，不修改生产限流规则。
+   */
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  com.zhida.agent.auth.RequestRateFilter rateFilter;
+
+  @org.junit.jupiter.api.BeforeEach
+  void resetRateLimitWindow() {
+    if (rateFilter != null) rateFilter.resetForTests();
+  }
+
   String user, other, agent, secondAgent, admin, category;
   JdbcTemplate jdbc;
 
@@ -325,6 +339,40 @@ class SupportTicketHttpTest {
                 .getStatusCode()
                 .value())
         .isEqualTo(409);
+  }
+
+  /**
+   * 模块 4 的用户确认建单边界：草稿的 requestId 在确认前查不到工单；确认后同一 requestId
+   * 能查到原工单，重复提交不会建出第二张；不同用户使用相同 requestId 互不影响。
+   */
+  @Test
+  void draftRequestIdDetectsDuplicatesPerUser() {
+    String request = UUID.randomUUID().toString();
+    assertThat(
+            call(HttpMethod.GET, "/ticket-drafts/" + request, user, null).getStatusCode().value())
+        .isEqualTo(204);
+    assertThat(call(HttpMethod.GET, "/ticket-drafts/" + request, null, null).getStatusCode().value())
+        .isEqualTo(401);
+
+    Map first = create(request);
+    var found = call(HttpMethod.GET, "/ticket-drafts/" + request, user, null);
+    assertThat(found.getStatusCode().value()).isEqualTo(200);
+    assertThat(found.getBody().get("id")).isEqualTo(id(first));
+
+    // 重复提交同一 requestId 仍然只有一张工单。
+    assertThat(id(create(request))).isEqualTo(id(first));
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT COUNT(*) FROM support_ticket WHERE request_id=?", Integer.class, request))
+        .isEqualTo(1);
+
+    // 其他用户用同一 requestId 看不到本人工单；客服也不能借该接口查询用户工单。
+    assertThat(
+            call(HttpMethod.GET, "/ticket-drafts/" + request, other, null).getStatusCode().value())
+        .isEqualTo(204);
+    assertThat(
+            call(HttpMethod.GET, "/ticket-drafts/" + request, agent, null).getStatusCode().value())
+        .isEqualTo(403);
   }
 
   @Test

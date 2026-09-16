@@ -128,4 +128,15 @@ public class SupportConfiguration {
       ProductOrderService productOrders) {
     return new SupportTicketService(repository, actors, productOrders);
   }
+
+  @Bean
+  SupportTools supportTools(
+      ProductOrderService productOrders,
+      SupportTicketService supportTickets,
+      SupportActorResolver actors,
+      com.zhida.agent.knowledge.KnowledgeBaseService knowledgeBaseService) {
+    // 售后工具集只在售后模块启用时存在；Orchestrator 用 ObjectProvider 可选注入，
+    // 因此关闭售后模块时研究助手仍按原工具集运行。
+    return new SupportTools(productOrders, supportTickets, actors, knowledgeBaseService);
+  }
 }

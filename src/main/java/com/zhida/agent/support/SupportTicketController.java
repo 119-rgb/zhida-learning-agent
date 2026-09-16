@@ -88,6 +88,31 @@ public class SupportTicketController {
     return service.list(actors.resolve(p), view);
   }
 
+  /**
+   * 按草稿的 requestId 检查是否已经建单。返回空体表示尚未创建，页面可以继续提交；
+   * 返回工单体表示该 requestId 已使用，页面应直接展示原工单而不是再次提交。
+   * 该查询只作用于当前登录用户，其他用户使用同一 requestId 不会互相影响。
+   *
+   * <p>路径使用独立的 {@code /ticket-drafts/} 前缀而不是 {@code /tickets/by-request/}，
+   * 避免与 {@code /tickets/{id}} 形成两级路径下的字面量与变量竞争，路由意图更明确。
+   */
+  /**
+   * 按草稿的 requestId 检查是否已经建单。返回 204 表示尚未创建，页面可以继续提交；
+   * 返回 200 与工单体表示该 requestId 已使用，页面应直接展示原工单而不是再次提交。
+   * 该查询只作用于当前登录用户，其他用户使用同一 requestId 不会互相影响。
+   *
+   * <p>注意：这里显式映射 200/204，不使用 {@code ResponseEntity.of(Optional)}——后者在
+   * Optional 为空时返回 404，会把“尚未建单”与“资源不存在”混为一谈。
+   */
+  @GetMapping("/ticket-drafts/{requestId}")
+  public org.springframework.http.ResponseEntity<Ticket> createdBy(
+      Principal p, @PathVariable String requestId) {
+    return service
+        .createdBy(actors.resolve(p), requestId)
+        .map(org.springframework.http.ResponseEntity::ok)
+        .orElseGet(() -> org.springframework.http.ResponseEntity.noContent().build());
+  }
+
   @GetMapping("/tickets/{id}")
   public Detail detail(Principal p, @PathVariable String id) {
     return service.detail(actors.resolve(p), id);

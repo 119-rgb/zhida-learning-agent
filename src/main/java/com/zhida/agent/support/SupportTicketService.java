@@ -49,6 +49,20 @@ public class SupportTicketService {
     }
   }
 
+  /**
+   * AI 只能生成未确认草稿；confirmed 固定为 false，且此记录不会写库。requestId 由后端生成，
+   * 用户确认后再原样提交给 create，届时分类状态、订单归属和全部业务规则会重新校验。
+   */
+  public record Draft(
+      String requestId,
+      String title,
+      String description,
+      String categoryId,
+      String categoryName,
+      String orderId,
+      boolean confirmed,
+      String nextAction) {}
+
   private Actor refresh(Actor supplied) {
     // Actor 中的 role 不作为授权依据；重新查库，防止伪造角色或继续使用已经撤销的角色。
     if (supplied == null) throw error(HttpStatus.UNAUTHORIZED, "请先登录");
@@ -178,6 +192,44 @@ VALUES (?,?,?,?,?,?,?,?,?)
           .map(t -> replay(t, hash))
           .orElseThrow(() -> conflict("创建冲突，请重试"));
     }
+  }
+
+  public Draft draft(
+      Actor supplied, String titleValue, String descriptionValue, String categoryId, String orderIdValue) {
+    Actor actor = refresh(supplied);
+    role(actor, USER);
+    String title = text(titleValue, 120, "标题");
+    String description = text(descriptionValue, 4000, "问题描述");
+    String category = text(categoryId, 36, "分类");
+    Category chosen =
+        repository.category(category, false).orElseThrow(() -> error(HttpStatus.BAD_REQUEST, "分类不存在"));
+    if (!chosen.enabled()) throw error(HttpStatus.BAD_REQUEST, "分类已停用");
+    String orderId =
+        orderIdValue == null || orderIdValue.isBlank()
+            ? null
+            : productOrders.myOrder(actor, orderIdValue).id();
+    return new Draft(
+        UUID.randomUUID().toString(),
+        title,
+        description,
+        chosen.id(),
+        chosen.name(),
+        orderId,
+        false,
+        "请用户核对草稿并明确确认后，再调用工单创建接口。");
+  }
+
+  /**
+   * 按 requestId 查询本人已创建的工单，供页面在确认建单前检测重复提交。
+   *
+   * <p>只读接口，因此不要求 expectedVersion；查询始终带 user_id 条件，其他用户的工单即使
+   * requestId 相同也查不到。返回空表示该 requestId 尚未建单，可以继续确认创建。
+   */
+  public Optional<Ticket> createdBy(Actor supplied, String requestIdValue) {
+    Actor actor = refresh(supplied);
+    role(actor, USER);
+    String key = text(requestIdValue, 64, "requestId");
+    return repository.byRequest(actor.id(), key);
   }
 
   private Ticket replay(Ticket ticket, String hash) {

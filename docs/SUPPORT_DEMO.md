@@ -1,4 +1,4 @@
-# 售后工单 HTTP 演示（模块 1–3）
+# 售后工单 HTTP 演示（模块 1–4）
 
 此演示使用虚构业务，面向已启用售后、JWT 与持久化的隔离环境。当前没有售后网页流程；以下是 HTTP 调用顺序，不代表用户、客服或管理员页面已经完成。先按 [SUPPORT_DATABASE.md](SUPPORT_DATABASE.md) 配置数据库和角色，并分别取得虚构用户、客服、管理员的 JWT。
 
@@ -150,4 +150,36 @@ Content-Type: application/json
 
 `GET /api/v1/support/tickets?view=mine` 为默认查询：用户只看到自己的工单，客服只看到本人处理的工单。客服可用 `view=pending` 查看待受理队列，管理员可用 `view=all` 查看全部记录。`GET /api/v1/support/tickets/<ticket-id>` 返回 `ticket`、`replies`、`events`。
 
-自动验收已用真实 JWT/HTTP 验证权限、公共/私人知识边界、订单归属及完整状态闭环，用隔离 H2 和向量替身验证并发、幂等、事务回滚、旧表升级、命名空间隔离与出处响应。全量 113 项（1 项真实 MySQL 跳过），模块 3 新增 5 项。真实 MySQL、真实模型/Embedding 和售后页面浏览器验收本次未执行。
+## 8. 售后 Agent 会话与确认建单（模块 4）
+
+售后助手入口使用与研究助手相同的请求体，服务端固定为售后模式。未登录返回 401，游客返回 403。
+
+```http
+POST /api/v1/support/assistant/stream
+Authorization: Bearer <user-jwt>
+Content-Type: application/json
+Accept: text/event-stream
+
+{"message":"我的订单已经付款，但服务没有开通","conversationId":"demo-assistant-001"}
+```
+
+事件顺序与研究助手一致：`task.started`、`plan.created`、`step.started`、`answer.started`、`answer.delta`、可能的 `tool.started`/`tool.completed`、`task.completed`；失败时为 `task.failed`。没有配置真实模型时进入演示模式，只说明未调用模型，不会生成草稿。
+
+模型可用的工具只有 `current_date`、`knowledge_search`、`support_orders`、`support_order`、`support_tickets`、`support_ticket`、`support_categories`、`support_ticket_draft`。没有任何创建、关闭、退款、改订单状态、接单或分配的写工具，也没有联网搜索。
+
+`support_ticket_draft` 返回的是**未确认草稿**，例如 `{"requestId":"...","title":"...","description":"...","categoryId":"...","categoryName":"...","orderId":"...","confirmed":false,"nextAction":"..."}`，并且不会写入数据库。用户核对后再显式调用建单接口（第 4 步），`requestId` 使用草稿返回的值。
+
+提交前可先检查该 `requestId` 是否已经建单，避免重复：
+
+```http
+GET /api/v1/support/ticket-drafts/<draft-requestId>
+Authorization: Bearer <user-jwt>
+```
+
+`204 No Content` 表示尚未建单，可以继续提交；`200` 与工单体表示该 `requestId` 已使用，页面应直接展示原工单。该查询只作用于当前用户，其他用户用同一 `requestId` 查不到，客服调用返回 403。
+
+模型不可用时（供应商报错、超时、工具预算耗尽）只会让这次会话以 `task.failed` 结束，不会创建工单；第 4 步的手动建单和第 5–7 步的客服处理流程仍然可用。
+
+## 自动验收范围
+
+自动验收已用真实 JWT/HTTP 验证权限、公共/私人知识边界、订单归属及完整状态闭环，用隔离 H2、向量替身和可编程模型替身验证并发、幂等、事务回滚、旧表升级、命名空间隔离、只读工具集、伪造身份无效、草稿确认与失败降级。全量 124 项（1 项真实 MySQL 跳过），模块 4 新增 9 项。真实 MySQL、真实模型/Embedding/Tavily 和售后页面浏览器验收本次未执行。

@@ -20,7 +20,7 @@ class TaskLifecycleTest {
   TaskLifecycleTest() {
     when(repository.recentMessages(anyString(), anyString())).thenReturn(List.of());
     when(repository.activeMemories(anyString())).thenReturn(List.of());
-    when(orchestrator.prepareWithContext(any(), anyList(), anyString(), anyString()))
+    when(orchestrator.prepareWithContext(any(), anyList(), anyString(), anyString(), any()))
         .thenReturn(core);
   }
 
@@ -163,13 +163,13 @@ class TaskLifecycleTest {
 
   @Test
   void preparationFailureReleasesLockAndDoesNotStartTask() {
-    when(orchestrator.prepareWithContext(any(), anyList(), anyString(), anyString()))
+    when(orchestrator.prepareWithContext(any(), anyList(), anyString(), anyString(), any()))
         .thenThrow(new IllegalArgumentException("invalid knowledge base"));
     assertThatThrownBy(this::prepare).isInstanceOf(IllegalArgumentException.class);
     verify(tasks, never()).begin(anyString(), anyString(), anyString(), anyString(), anyList());
     doReturn(core)
         .when(orchestrator)
-        .prepareWithContext(any(), anyList(), anyString(), anyString());
+        .prepareWithContext(any(), anyList(), anyString(), anyString(), any());
     prepare().cancel();
   }
 }

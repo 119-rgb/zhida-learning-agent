@@ -1,6 +1,7 @@
 package com.zhida.agent.observability;
 
 import com.zhida.agent.auth.KnowledgeScope;
+import com.zhida.agent.support.SupportToolContext;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import java.util.function.Supplier;
 import org.springframework.stereotype.Component;
@@ -15,12 +16,22 @@ public class ObservableToolInterceptor {
 
   public String execute(
       String taskId, String scope, ToolExecutionRequest request, Supplier<String> action) {
+    return execute(taskId, scope, null, request, action);
+  }
+
+  public String execute(
+      String taskId,
+      String scope,
+      String authenticatedOwner,
+      ToolExecutionRequest request,
+      Supplier<String> action) {
     publisher.acquireToolCall(taskId);
     String arguments = abbreviate(request.arguments(), 1000);
     publisher.publish(taskId, ToolTrace.started(request.id(), request.name(), arguments));
     long started = System.nanoTime();
     try {
       KnowledgeScope.set(scope);
+      SupportToolContext.set(authenticatedOwner);
       String result = action.get();
       publisher.publish(
           taskId,
@@ -45,6 +56,7 @@ public class ObservableToolInterceptor {
       throw error;
     } finally {
       KnowledgeScope.clear();
+      SupportToolContext.clear();
     }
   }
 

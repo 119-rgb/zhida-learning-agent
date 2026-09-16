@@ -46,6 +46,18 @@ public class ConversationHistory {
 
   public ResearchSession prepare(
       ResearchRequest request, ResearchOrchestrator orchestrator, String owner) {
+    return prepare(request, orchestrator, owner, AgentMode.RESEARCH);
+  }
+
+  /**
+   * 准备一次持久化的 Agent 会话。mode 由调用入口（研究助手或售后助手）决定并在整个任务中固定，
+   * 任务、消息、工具事件和用量仍复用同一套持久化链路，售后会话不会另建一套记录方式。
+   */
+  public ResearchSession prepare(
+      ResearchRequest request,
+      ResearchOrchestrator orchestrator,
+      String owner,
+      AgentMode mode) {
     String id =
         request.conversationId() == null || request.conversationId().isBlank()
             ? UUID.randomUUID().toString()
@@ -73,7 +85,8 @@ public class ConversationHistory {
                   id, request.message(), request.requestId(), request.knowledgeBaseId()),
               context,
               taskId,
-              owner);
+              owner,
+              mode);
       tasks.begin(owner, id, taskId, request.message(), memories);
       var session = new PersistedSession(core, owner, id, taskId, key);
       cancellations.put(taskId, session);

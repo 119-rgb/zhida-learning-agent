@@ -1,8 +1,8 @@
 # 知答分模块学习与实现路线
 
-目标是能独立解释和修改 Java 后端项目。售后平台模块 1 工单核心、模块 2 模拟订单与模块 3 售后知识库已实现并通过隔离验收；原研究助手仍可单独学习。每个模块完成可运行结果和验证后再进入下一项，状态以 PROJECT_STATUS.md 和当前测试为准。
+目标是能独立解释和修改 Java 后端项目。售后平台模块 1 工单核心、模块 2 模拟订单、模块 3 售后知识库和模块 4 售后 Agent 已实现并通过隔离验收；原研究助手仍可单独学习。每个模块完成可运行结果和验证后再进入下一项，状态以 PROJECT_STATUS.md 和当前测试为准。
 
-各阶段执行独立审查、修复复查与验证，记录在 [reviews](reviews/README.md)；模块 1 的核心与中文注释已完成独立审查。核心注释优先说明权限依据、状态合法性、事务边界、幂等和并发保证，避免逐行重复代码。
+各阶段执行独立审查、修复复查与验证，记录在 [reviews](reviews/README.md)；模块 1–3 已完成独立审查，模块 4 的独立审查待另一位审查者完成。核心注释优先说明权限依据、状态合法性、事务边界、幂等、并发保证和提示注入边界，避免逐行重复代码。
 
 ## 售后模块 1：工单核心（已实现、自动验证）
 
@@ -34,20 +34,31 @@
 
 完成标准：能解释为什么公共库使用固定命名空间、为什么页面上的 writable 不能替代写接口二次校验、如何避免公共权限穿透私人文档，以及 RAG 为什么必须返回可核对出处并允许资料不足。
 
+## 售后模块 4：售后 Agent 与工具边界（已实现、自动验证）
+
+入口：`SupportAssistantController`、`SupportAgentInstruction`、`SupportTools`、`SupportToolContext`、`ResearchOrchestrator`（`AgentMode`）、`SupportTicketService.draft/createdBy`。
+
+学习：LangChain4j `@Tool` 子集选择、服务端模式与系统指令绑定、ThreadLocal 认证上下文、只读工具设计、草稿与业务写入分离、幂等查询接口、提示注入边界、失败降级。
+
+范围：新增 `POST /api/v1/support/assistant/stream`，服务端固定 `SUPPORT` 模式，使用售后专用指令与只读工具集（订单/工单/分类查询、知识检索、草稿）。工具不接受身份参数，身份来自 `SupportToolContext`。草稿不写库；用户确认后由 `POST /api/v1/support/tickets` 建单，`GET /api/v1/support/ticket-drafts/{requestId}` 用于防重复提交。模型失败只结束本次会话，手动流程不受影响。研究与售后共用 `ResearchSseStreamer` 的取消、超时和队列保护。
+
+完成标准：能解释为什么模式必须由服务端决定、为什么工具参数里不能有 userId、为什么“生成草稿”和“创建工单”必须分成两个入口、为什么模型失败不能让业务不可用，以及文档内容为什么不能覆盖系统指令。
+
 后续售后模块依次为：
 
-1. 售后 Agent 与人工客服协作边界。
-2. 用户、客服、管理员三端页面与演示环境。
+1. 用户、客服、管理员三端页面与演示环境（模块 5）。
 
 工单接口、独立表和虚构 HTTP 演示见 [SUPPORT_DATABASE.md](SUPPORT_DATABASE.md) 与 [SUPPORT_DEMO.md](SUPPORT_DEMO.md)。
 
-下一售后模块验收：Agent 阶段验证草稿确认、失败降级及提示注入边界；页面阶段用完整虚构闭环做浏览器验收。上述均为计划。
+模块 5 验收：用完整虚构闭环做浏览器验收，覆盖用户提交问题 → AI 查询并有依据地回答 → 确认建单 → 客服接单处理 → 用户确认解决并评价关闭。上述为计划。
 
-模块 1 新增 17 项自动测试，全量 99 项（1 项真实 MySQL 跳过）。先阅读 SupportTicketServiceTest、SupportTicketHttpTest、SupportConfigurationTest，解释真实并发、快照读取与审计故障注入。
+模块 1 新增 17 项自动测试。先阅读 SupportTicketServiceTest、SupportTicketHttpTest、SupportConfigurationTest，解释真实并发、快照读取与审计故障注入。
 
-模块 2 新增 9 项自动测试，全量 108 项（1 项真实 MySQL 跳过）。先阅读 ProductOrderServiceTest 与 SupportOrderHttpTest，解释 owner SQL、造单幂等、事务审计和只读订单边界；再读 SupportConfigurationTest 的旧表升级用例。
+模块 2 新增 9 项自动测试。先阅读 ProductOrderServiceTest 与 SupportOrderHttpTest，解释 owner SQL、造单幂等、事务审计和只读订单边界；再读 SupportConfigurationTest 的旧表升级用例。
 
-模块 3 新增 5 项自动测试，全量 113 项（1 项真实 MySQL 跳过）。先阅读 SupportKnowledgeHttpTest，解释公共读/管理员写、私人 404、系统域哈希和旧命名空间碰撞回归；再读 KnowledgeBaseServiceTest 的依据不足与 PDF 出处断言。
+模块 3 新增 5 项自动测试。先阅读 SupportKnowledgeHttpTest，解释公共读/管理员写、私人 404、系统域哈希和旧命名空间碰撞回归；再读 KnowledgeBaseServiceTest 的依据不足与 PDF 出处断言。
+
+模块 4 新增 9 项自动测试，全量 124 项（1 项真实 MySQL 跳过）。先阅读 SupportAgentOrchestrationTest，用可编程模型替身解释系统指令、工具子集、伪造身份无效、草稿需确认、注入内容和失败降级；再读 SupportAssistantHttpTest 的 401/403 与 Demo 模式不建单，以及 SupportTicketHttpTest 的草稿 requestId 隔离用例。
 
 ## 原研究助手学习路线
 
