@@ -144,6 +144,7 @@ MySQL 数据库 `zhida_agent` 需提前创建，应用账户需具备该库读�
 - 模式由服务端固定为 `SUPPORT`，客户端不能声明模式，因此无法让售后会话改用研究助手的通用指令或联网工具。
 - 系统指令为 `SupportAgentInstruction`（售后专用），`SupportTools` 只注册 8 个工具：`current_date`、`knowledge_search`、`support_orders`、`support_order`、`support_tickets`、`support_ticket`、`support_categories`、`support_ticket_draft`。工具清单中没有 create/close/refund/payment/activate/assign/claim。
 - 草稿包含标题、问题描述、分类、关联订单和后端生成的 `requestId`，并固定 `confirmed=false`；草稿不写数据库。只有用户在前端明确确认后，`POST /api/v1/support/tickets`（`confirmed=true`）才会建单，届时重新校验分类启用、订单归属和 `requestId` 幂等。
+- 页面还能主动生成草稿（`POST /api/v1/support/ticket-drafts`）：真实模型并不总会调用草稿工具，助手页的「生成工单草稿」用分类/订单下拉（数据来自接口）组装描述并提交，走的是与模型工具**同一个**业务方法与校验，标题由服务端从描述派生。草稿仍不写库，确认后才建单。
 - `GET /api/v1/support/ticket-drafts/{requestId}` 返回 204（尚未建单）或 200 与原工单（该 requestId 已使用），页面据此避免重复建单；查询只作用于当前用户。
 - 模型失败、超时或工具预算耗尽只影响这次会话，用户仍可通过工单接口手动建单和处理；工具调用记录、事件序号、取消、超时和用量统计沿用现有 `ToolTracePublisher` / `TokenUsage` 链路。
 - 知识库片段、用户输入和工具返回内容都作为数据处理，`SupportAgentInstruction` 是唯一规则来源；文档里出现“忽略以上规则”只作为片段内容回传，不会成为新的系统指令。
@@ -179,6 +180,7 @@ MySQL 数据库 `zhida_agent` 需提前创建，应用账户需具备该库读�
 | GET /api/v1/support/admin/orders | 管理员查看全部模拟订单，仅用于核对演示数据 |
 | GET /api/v1/support/tickets/{id} | 工单、回复和审计事件的一致快照 |
 | POST /api/v1/support/tickets/{id}/comments、claim、replies、solution、reopen、confirm、assign | 对应用户、客服、管理员操作；必需 expectedVersion |
+| POST /api/v1/support/ticket-drafts | 页面主动生成未确认草稿（标题由服务端从描述派生）；只返回草稿，不写库 |
 
 SSE 事件包括 task.started、plan.created、step.started、answer.started、tool.started / completed / failed、answer.delta、task.completed / failed。事件编号按发送顺序递增。没有调用工具时不生成工具事件。
 

@@ -183,6 +183,12 @@ function signOut(message) {
     // 登出必须清掉待确认草稿并关闭弹窗：草稿属于上一个账号，残留会让下一个登录者看到并确认它。
     pendingDraft = null;
     closeDraftModal();
+    if (el('draftCompose')) el('draftCompose').hidden = true;
+    if (el('viewDraft')) el('viewDraft').hidden = true;
+    // 对话上下文同样属于上一个账号，必须清空，否则下一个账号会看到上一段问答被当成草稿描述。
+    assistantConversationId = null;
+    lastAssistantQuestion = '';
+    lastAssistantAnswer = '';
     el('accountName').textContent = '未登录';
     el('accountRole').textContent = '—';
     el('accountHint').textContent = '登录后查看售后内容';
@@ -333,6 +339,10 @@ async function dispatch() {
         return;
     }
     currentTicketId = route === 'ticket' ? currentTicketFromHash() : null;
+    // 切路由时关闭草稿弹窗与造草稿表单：它们都是跨路由的固定定位层，残留会挡住新页面的点击，
+    // 也会让用户在下一条路由上看到上一页的草稿。已生成的草稿保留，可用「查看草稿」重新打开。
+    closeDraftModal();
+    if (el('draftCompose')) el('draftCompose').hidden = true;
     el('viewTitle').textContent = config.title;
     el('viewSubtitle').textContent = config.subtitle;
     markActiveNav(route);
@@ -814,6 +824,11 @@ async function loadAgentOptions(select) {
 
 /* ---------------- 售后助手 ---------------- */
 
+/** 售后助手：最近一次的回答，用于生成草稿时的问题描述。 */
+let lastAssistantAnswer = '';
+/** 售后助手：本次对话的第一个问题，草稿描述的标题来源。 */
+let lastAssistantQuestion = '';
+
 function renderAssistant() {
     if (!assistantConversationId) assistantConversationId = crypto.randomUUID();
     view.innerHTML = `
@@ -836,7 +851,26 @@ function renderAssistant() {
                         <button class="button primary" type="button" id="assistantSend">发送</button>
                         <button class="button secondary" type="button" id="assistantStop" hidden>停止</button>
                     </div>
-                    <p class="composer-status" id="assistantStatus"><span id="assistantStatusText">助手只做查询和建议；创建工单需要你确认。</span><button class="text-button" type="button" id="manualFallback">手动建单</button></p>
+                    <p class="composer-status" id="assistantStatus"><span id="assistantStatusText">助手只做查询和建议；创建工单需要你确认。</span><button class="text-button" type="button" id="assistantDraft">生成工单草稿</button><button class="text-button" type="button" id="viewDraft" hidden>查看草稿</button><button class="text-button" type="button" id="manualFallback">手动建单</button></p>
+                    <div class="draft-compose" id="draftCompose" hidden>
+                        <div class="field">
+                            <label class="field-label" for="draftCategory">分类（必选）</label>
+                            <select id="draftCategory"></select>
+                        </div>
+                        <div class="field">
+                            <label class="field-label" for="draftOrder">关联订单（可选）</label>
+                            <select id="draftOrder"></select>
+                        </div>
+                        <div class="field">
+                            <label class="field-label" for="draftDescription">问题描述</label>
+                            <textarea id="draftDescription" maxlength="4000" rows="3"></textarea>
+                        </div>
+                        <p class="composer-status" id="draftComposeStatus"></p>
+                        <div class="inline-fields">
+                            <button class="button primary" type="button" id="draftComposeSubmit">生成草稿</button>
+                            <button class="button secondary" type="button" id="draftComposeCancel">取消</button>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>`;
@@ -845,6 +879,12 @@ function renderAssistant() {
     el('assistantSend').addEventListener('click', () => sendAssistantMessage());
     el('assistantStop').addEventListener('click', () => assistantController && assistantController.abort());
     el('manualFallback').addEventListener('click', () => navigate('newTicket'));
+    el('assistantDraft').addEventListener('click', () => openDraftCompose());
+    el('viewDraft').addEventListener('click', () => { if (pendingDraft) offerDraft(pendingDraft); });
+    el('draftComposeCancel').addEventListener('click', () => { el('draftCompose').hidden = true; });
+    el('draftComposeSubmit').addEventListener('click', () => submitManualDraft());
+    // 重新进入助手页时，只有确实存在待确认草稿才显示「查看草稿」。
+    el('viewDraft').hidden = !pendingDraft;
     input.addEventListener('keydown', event => {
         if (event.key === 'Enter' && !event.shiftKey) {
             event.preventDefault();
@@ -879,6 +919,9 @@ async function sendAssistantMessage() {
     const message = input.value.trim();
     if (!message) return;
     input.value = '';
+    // 记录本次问题：草稿描述的标题与「问题：」部分取自这里，不依赖模型是否调用了草稿工具。
+    if (!lastAssistantQuestion) lastAssistantQuestion = message;
+    lastAssistantAnswer = '';
     appendBubble('user', message);
     const answer = appendBubble('assistant', '');
     const status = el('assistantStatusText');
@@ -947,6 +990,8 @@ function handleSseBlock(block, answerNode, statusNode) {
     const data = payload.data || {};
     if (type === 'answer.delta' && data.content) {
         answerNode.textContent += data.content;
+        // 记录本次回答，供「生成工单草稿」组装描述使用（页面不做模型调用）。
+        lastAssistantAnswer = answerNode.textContent.slice(0, 2000);
         el('chatLog').scrollTop = el('chatLog').scrollHeight;
     } else if (type === 'tool.started') {
         statusNode.textContent = `正在调用 ${toolLabel(data.toolName)}…`;
@@ -1011,8 +1056,93 @@ function appendManualFallback(answerNode) {
     bubble.appendChild(button);
 }
 
+/* ---------------- 售后助手：主动生成草稿 ---------------- */
+
+/**
+ * 展开「生成工单草稿」表单。
+ *
+ * <p>为什么需要这个入口：草稿原先只能由模型调用 support_ticket_draft 产生，而真实模型实测很少
+ * 主动调用它，用户因此很难走到建单流程。分类和关联订单必须从接口拉取下拉项而不是让用户输入 ID，
+ * 这样既不依赖模型，也不会因为手输错误而关联失败。
+ */
+async function openDraftCompose() {
+    const compose = el('draftCompose');
+    const status = el('draftComposeStatus');
+    compose.hidden = false;
+    if (el('viewDraft')) el('viewDraft').hidden = true;
+    status.textContent = '正在读取分类和我的订单…';
+    status.classList.remove('error');
+    try {
+        const [categories, orders] = await Promise.all([
+            getJson('/api/v1/support/categories'),
+            getJson('/api/v1/support/orders').catch(() => [])
+        ]);
+        const enabled = categories.filter(category => category.enabled);
+        el('draftCategory').innerHTML = enabled.length
+            ? enabled.map(category => `<option value="${escapeHtml(category.id)}">${escapeHtml(category.name)}</option>`).join('')
+            : '<option value="">没有可用分类，请联系管理员配置</option>';
+        el('draftOrder').innerHTML = '<option value="">不关联订单</option>'
+            + orders.map(order => `<option value="${escapeHtml(order.id)}">${escapeHtml(order.orderNo)} · ${escapeHtml(order.productName || '')}</option>`).join('');
+        // 描述默认带入本次对话，用户仍可修改后提交。
+        el('draftDescription').value = draftDescriptionFromConversation();
+        status.textContent = enabled.length
+            ? '分类与订单来自服务端；确认后才会真正创建工单。'
+            : '当前没有启用中的分类，无法生成草稿。';
+        if (enabled.length) el('draftDescription').focus();
+    } catch (error) {
+        status.textContent = error.message;
+        status.classList.add('error');
+    }
+}
+
+/**
+ * 用本次对话组装草稿描述：先写用户的问题，再附上助手的回答，便于客服了解上下文。
+ * 没有对话时（用户可能先点「生成工单草稿」）回退到输入框里已经写好的内容，避免出现空描述。
+ */
+function draftDescriptionFromConversation() {
+    const question = lastAssistantQuestion || el('assistantInput').value.trim();
+    const answer = lastAssistantAnswer;
+    const parts = [];
+    if (question) parts.push(`问题：${question}`);
+    if (answer) parts.push(`助手回答：${answer}`);
+    return parts.join('\n\n').slice(0, 4000);
+}
+
+async function submitManualDraft() {
+    const button = el('draftComposeSubmit');
+    const status = el('draftComposeStatus');
+    const description = el('draftDescription').value.trim();
+    const categoryId = el('draftCategory').value;
+    const orderId = el('draftOrder').value || null;
+    if (!description) {
+        status.textContent = '问题描述不能为空。';
+        status.classList.add('error');
+        return;
+    }
+    if (!categoryId) {
+        status.textContent = '请选择分类。';
+        status.classList.add('error');
+        return;
+    }
+    setBusy(button, true, '正在生成…');
+    status.classList.remove('error');
+    try {
+        // 与模型工具返回同一种草稿对象；后端固定 confirmed=false 且不写数据库。
+        const draft = await postJson('/api/v1/support/ticket-drafts', { description, categoryId, orderId });
+        offerDraft(draft);
+    } catch (error) {
+        status.textContent = error.message;
+        status.classList.add('error');
+    } finally {
+        setBusy(button, false);
+    }
+}
+
 function offerDraft(draft) {
     pendingDraft = draft;
+    // 打开确认弹窗前收起造草稿表单：两者不能同时占住页面，弹窗也会挡住表单。
+    el('draftCompose').hidden = true;
+    if (el('viewDraft')) el('viewDraft').hidden = true;
     el('draftBody').innerHTML = `
         <dl class="draft-grid">
             <div><dt>标题</dt><dd>${escapeHtml(draft.title)}</dd></div>
@@ -1031,6 +1161,16 @@ function offerDraft(draft) {
 function closeDraftModal() {
     el('draftModal').hidden = true;
     el('draftModal').setAttribute('aria-hidden', 'true');
+}
+
+/**
+ * 取消确认弹窗：收起造草稿表单并保留这张草稿，用户可以用「查看草稿」重新打开，
+ * 不必重新填写；只有确认建单或切换路由登录状态时才丢弃。
+ */
+function dismissDraftModal() {
+    el('draftCompose').hidden = true;
+    closeDraftModal();
+    if (el('viewDraft')) el('viewDraft').hidden = !pendingDraft;
 }
 
 async function confirmDraft() {
@@ -1473,7 +1613,7 @@ el('authForm').addEventListener('submit', async event => {
 });
 
 el('draftConfirm').addEventListener('click', confirmDraft);
-el('draftCancel').addEventListener('click', () => { pendingDraft = null; closeDraftModal(); });
+el('draftCancel').addEventListener('click', () => dismissDraftModal());
 el('openSidebar').addEventListener('click', () => shell.classList.add('nav-open'));
 el('closeSidebar').addEventListener('click', () => shell.classList.remove('nav-open'));
 el('sidebarOverlay').addEventListener('click', () => shell.classList.remove('nav-open'));

@@ -76,6 +76,28 @@
 
 审查记录见 [docs/reviews/2026-09-17-module-5.md](reviews/2026-09-17-module-5.md)。
 
+### 2026-09-17 待办落地：页面主动生成工单草稿
+
+真实模型实测很少主动调用草稿工具（3 轮会话 10 次工具调用全为查询类），用户因此很难走到建单流程。本轮补上页面入口：
+
+- 新增 `POST /api/v1/support/ticket-drafts`（`SupportTicketService.draftFromPage`）：与模型工具**同一个** `draft` 业务方法，因此分类启用、订单归属、角色与 requestId 规则完全一致；标题由服务端从描述派生（≤120 字），草稿固定 `confirmed=false` 且不写数据库。
+- 助手页新增「生成工单草稿」：分类与关联订单下拉都来自服务端接口（不手输 ID），问题描述默认带入本轮问答，用户可修改后提交，随后复用同一个确认弹窗。
+- 草稿生命周期收紧：切换路由会收起弹窗与表单（已生成的草稿保留，可用「查看草稿」重新打开）；点「暂不创建」不再丢弃草稿；登出清空草稿与对话上下文。
+- 自动测试新增 `SupportTicketServiceTest.pageDraftDerivesTitleAndNeverPersists`：覆盖标题截断、不写库、客服调用 403、停用分类 400。
+
+同一轮修复的页面缺陷：
+
+- `.draft-compose { display: grid }` 会覆盖 `hidden` 属性的默认 `display: none`，导致「收起」无效并遮挡页面。已补 `.draft-compose[hidden] { display: none; }`。
+- `confirmDraft` 原先只判 `200`，403/500 会继续提交；现在只有 `204` 才继续，其他状态提示后端信息。
+- 造草稿表单的分类/订单是异步拉取，提交前未等加载完成会得到空描述；已在脚本与页面流程中显式等待。
+- 验收脚本改为按 `ticketId` 精确打开工单：助手页新用例会产生同标题工单，`filter().first()` 会选错对象。
+
+实际执行：
+
+- `mvn -o clean verify '-Dzhida.build.directory=tmp/dsh-draft-final'`：134 项、0 失败、0 错误、1 项真实 MySQL 测试跳过，可执行 JAR 生成成功。
+- `node scripts/verify-support-workbench.cjs`：**连续多次 PASS**（覆盖主动造草稿、取消后不建单、长草稿确认、客服处理、退回、关闭评价、手动建单、管理端）。连续第 3 次起会触发应用自带的每 IP 限流（429），脚本已把这种情况明确标注为「限流，稍后再跑」而不是功能失败。
+- 未执行：真实模型驱动的页面闭环（脚本用构造 SSE 事件）、真实 MySQL 与跨浏览器验收。
+
 审查遗留的 P3 中，本轮完成了一批低风险清理：未知角色的路由兜底改为最小可见性；401 早退不再留下「正在加载…」；草稿确认只在查询返回 204 时才继续提交（403/500 会提示错误而不是贸然建单）；修正与实现不符的文案；删除 `#publicKnowledgeChip`、`.topbar-actions`、`.close-sidebar` 等死节点与无用样式；补 `.auth-dialog.wide` 的 `vh` 回退与草稿长文本换行；验收脚本不再注入已废弃的 `tool.completed` 摘要桩；出处卡片过滤 `null` 元素。**继续保留的已知限制**：被拒路由的重定向仍会在历史里留一条记录，尝试用 `location.replace` 修复时实测会减少正常导航的历史条目（把 P3 打磨成回归），已回退并记录。
 
 本轮未执行：真实 MySQL 上的页面闭环（浏览器验收跑在隔离 H2 + demo-data 上）、真实模型驱动的页面闭环（脚本用构造的 SSE 事件）、跨浏览器与移动端、Docker、页面用例纳入 `mvn test`。

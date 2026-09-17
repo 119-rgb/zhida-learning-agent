@@ -99,13 +99,24 @@ public class SupportTicketController {
   }
 
   /**
-   * 按草稿的 requestId 检查是否已经建单。返回空体表示尚未创建，页面可以继续提交；
-   * 返回工单体表示该 requestId 已使用，页面应直接展示原工单而不是再次提交。
-   * 该查询只作用于当前登录用户，其他用户使用同一 requestId 不会互相影响。
+   * 页面主动生成工单草稿。模型是否调用草稿工具不可靠，因此提供等价的服务端入口：
+   * 页面在售后助手里填好分类、关联订单和问题描述后直接请求这里。
    *
-   * <p>路径使用独立的 {@code /ticket-drafts/} 前缀而不是 {@code /tickets/by-request/}，
-   * 避免与 {@code /tickets/{id}} 形成两级路径下的字面量与变量竞争，路由意图更明确。
+   * <p>与模型工具走同一个 {@code draft} 业务方法，因此同样只产生未写入数据库的草稿，
+   * 也返回后端生成的 requestId；真正的建单仍然是用户在页面确认后调用 {@code POST /tickets}。
    */
+  @PostMapping("/ticket-drafts")
+  @ResponseStatus(HttpStatus.CREATED)
+  public SupportTicketService.Draft draft(Principal p, @Valid @RequestBody DraftRequest r) {
+    return service.draftFromPage(
+        actors.resolve(p), r.description(), r.categoryId(), r.orderId());
+  }
+
+  public record DraftRequest(
+      @NotBlank @Size(max = 4000) String description,
+      @NotBlank @Size(max = 36) String categoryId,
+      @Size(max = 36) String orderId) {}
+
   /**
    * 按草稿的 requestId 检查是否已经建单。返回 204 表示尚未创建，页面可以继续提交；
    * 返回 200 与工单体表示该 requestId 已使用，页面应直接展示原工单而不是再次提交。

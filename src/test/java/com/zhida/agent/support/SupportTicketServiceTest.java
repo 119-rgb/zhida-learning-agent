@@ -290,6 +290,31 @@ class SupportTicketServiceTest {
     assertStatus(400, () -> service.create(user, request(UUID.randomUUID().toString())));
   }
 
+  /**
+   * 页面主动造草稿：标题从描述派生、长度受控，草稿不写库，且与模型工具一样固定 confirmed=false。
+   * 这是本轮新增的 HTTP 入口所依赖的业务方法。
+   */
+  @Test
+  void pageDraftDerivesTitleAndNeverPersists() {
+    String longProblem = "问题描述" + "补".repeat(200);
+    var draft = service.draftFromPage(user, longProblem, category, null);
+
+    assertThat(draft.confirmed()).isFalse();
+    assertThat(draft.categoryId()).isEqualTo(category);
+    assertThat(draft.orderId()).isNull();
+    assertThat(draft.requestId()).isNotBlank();
+    assertThat(draft.title()).hasSize(120).endsWith("…");
+    // 草稿只是内存对象：数据库中不应有任何工单。
+    assertThat(
+            jdbc.queryForObject("SELECT COUNT(*) FROM support_ticket", Integer.class))
+        .isZero();
+
+    // 客服不能生成用户草稿；停用分类也必须拒绝，避免建出无法处理的历史数据。
+    assertStatus(403, () -> service.draftFromPage(agent, "客服不能建草稿", category, null));
+    service.saveCategory(admin, category, "虚构订阅开通", false);
+    assertStatus(400, () -> service.draftFromPage(user, "分类已停用", category, null));
+  }
+
   @Test
   void categoryAuditFailureRollsBackCategory() {
     jdbc.execute(

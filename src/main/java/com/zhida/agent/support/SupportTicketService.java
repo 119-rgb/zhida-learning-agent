@@ -220,6 +220,26 @@ VALUES (?,?,?,?,?,?,?,?,?)
   }
 
   /**
+   * 页面主动生成草稿的入口。与模型工具走同一套分类、订单与角色校验以及 requestId 生成规则，
+   * 区别只在标题：页面填的是用户自己的问题描述，标题由服务端派生，避免让用户重复输入。
+   *
+   * <p>仍然只生成未确认草稿（confirmed 固定 false，不写库）；建单必须由用户确认后走 create。
+   */
+  public Draft draftFromPage(
+      Actor supplied, String descriptionValue, String categoryId, String orderIdValue) {
+    String description = text(descriptionValue, 4000, "问题描述");
+    return draft(supplied, deriveTitle(description), description, categoryId, orderIdValue);
+  }
+
+  /** 从问题描述派生一个不超过 120 字的标题，仅用于页面主动建草稿的默认值。 */
+  private static String deriveTitle(String description) {
+    String compact = description.replaceAll("\\s+", " ").trim();
+    int limit = 120;
+    if (compact.length() <= limit) return compact;
+    return compact.substring(0, limit - 1) + "…";
+  }
+
+  /**
    * 查询指定角色的账号列表，供管理员分配工单或选择演示订单归属用户。
    *
    * <p>只有管理员可以查看账号目录；角色名必须是受支持的角色，非法角色返回 400 而不是空列表。

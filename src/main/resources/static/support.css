@@ -440,8 +440,26 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 
 /* ---------- 草稿确认 ---------- */
 
-.draft-body { margin-top: 14px; }
-.draft-grid { display: grid; gap: 10px; }
+/* 助手页的主动造草稿表单：分类与订单来自接口，描述默认带入本次对话。 */
+.draft-compose {
+    display: grid;
+    gap: 10px;
+    margin-top: 12px;
+    padding: 14px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--soft);
+}
+/*
+ * display: grid 会覆盖 hidden 属性的默认 display: none，导致"收起"无效并挡住页面。
+ * 必须显式声明 hidden 时不显示。
+ */
+.draft-compose[hidden] { display: none; }
+.draft-compose textarea { width: 100%; padding: 9px 11px; border: 1px solid var(--line-strong); border-radius: 9px; resize: vertical; }
+.draft-compose select { width: 100%; padding: 9px 11px; border: 1px solid var(--line-strong); border-radius: 9px; background: #fff; }
+.draft-compose .inline-fields { margin-top: 0; }
+
+.draft-body { margin-top: 14px; }.draft-grid { display: grid; gap: 10px; }
 /* 草稿里的问题描述可能是没有空格的长串，必须允许在任意位置换行，否则会撑破弹窗。 */
 .draft-grid dd { overflow-wrap: anywhere; word-break: break-word; }
 .draft-grid dt { color: var(--muted); font-size: 12px; }
