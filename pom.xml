@@ -54,6 +54,16 @@
             <artifactId>langchain4j-open-ai</artifactId>
             <version>${langchain4j.version}</version>
         </dependency>
+        <!--
+          本地离线向量模型（all-MiniLM-L6-v2，384 维，ONNX 运行时）。模型文件直接打包在这个 jar 内，
+          因此没有第三方 Embedding 服务或 API Key 时也能完成文档向量化与检索。
+          注意版本轨不同：该模块发布号带 -beta30（项目原本已传递依赖同轨构件）。
+        -->
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-embeddings-all-minilm-l6-v2</artifactId>
+            <version>1.20.0-beta30</version>
+        </dependency>
         <dependency>
             <groupId>org.apache.pdfbox</groupId>
             <artifactId>pdfbox</artifactId>

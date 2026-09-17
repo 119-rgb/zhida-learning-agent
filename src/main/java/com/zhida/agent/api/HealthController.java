@@ -29,6 +29,14 @@ public class HealthController {
 
   @GetMapping("/health")
   public Map<String, Object> health() {
+    // 向量化有两种可用模式：外部 OpenAI 兼容服务（需三项配置）或内置离线模型（EMBEDDING_MODEL=local）。
+    boolean localEmbedding =
+        com.zhida.agent.knowledge.LocalVectorKnowledgeIndex.isLocalModel(
+            properties.getRag().getEmbeddingModel());
+    boolean remoteEmbedding =
+        StringUtils.hasText(properties.getRag().getEmbeddingBaseUrl())
+            && StringUtils.hasText(properties.getRag().getEmbeddingApiKey())
+            && StringUtils.hasText(properties.getRag().getEmbeddingModel());
     return Map.of(
         "status",
         "UP",
@@ -39,9 +47,10 @@ public class HealthController {
         "framework",
         "LangChain4j + Spring MVC",
         "embeddingConfigured",
-        StringUtils.hasText(properties.getRag().getEmbeddingBaseUrl())
-            && StringUtils.hasText(properties.getRag().getEmbeddingApiKey())
-            && StringUtils.hasText(properties.getRag().getEmbeddingModel()),
+        localEmbedding || remoteEmbedding,
+        // 明确标注生效模式，便于区分"用了内置离线模型"和"接了外部向量服务"。
+        "embeddingMode",
+        localEmbedding ? "local" : remoteEmbedding ? "remote" : "none",
         "searchEnabled",
         StringUtils.hasText(properties.getSearch().getTavilyApiKey()),
         "supportEnabled",

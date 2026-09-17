@@ -50,9 +50,11 @@ zhida:
     embedding-model: ${EMBEDDING_MODEL:}
     max-file-size: 20971520
     max-documents-per-knowledge-base: 20
-    chunk-size: 800
-    chunk-overlap: 120
-    top-k: 5
+    # 分块参数影响检索命中率：块越大，单个向量承载的语义越杂，越难被具体问题命中。
+    # 这里按部署可调（与其它配置一致），默认值保持原有行为。
+    chunk-size: ${ZHIDA_CHUNK_SIZE:800}
+    chunk-overlap: ${ZHIDA_CHUNK_OVERLAP:120}
+    top-k: ${ZHIDA_TOP_K:5}
 
 logging:
   level:

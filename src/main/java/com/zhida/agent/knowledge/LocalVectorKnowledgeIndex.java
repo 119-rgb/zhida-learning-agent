@@ -107,21 +107,39 @@ public class LocalVectorKnowledgeIndex {
     vectorStore = next;
   }
 
+  /**
+   * 本地离线向量模型的配置值。设置 {@code EMBEDDING_MODEL=local} 即启用：
+   * 模型（all-MiniLM-L6-v2，384 维）随依赖打包，不需要任何 API Key，也不联网。
+   */
+  static final String LOCAL_MODEL = "local";
+
+  /** 判断是否使用内置离线模型；仅在显式配置时启用，不改变原有外部服务行为。 */
+  public static boolean isLocalModel(String configuredModel) {
+    return configuredModel != null && LOCAL_MODEL.equalsIgnoreCase(configuredModel.trim());
+  }
+
   private EmbeddingModel model() {
     if (model == null) {
-      if (blank(properties.getEmbeddingBaseUrl())
-          || blank(properties.getEmbeddingApiKey())
-          || blank(properties.getEmbeddingModel()))
-        throw new IllegalStateException(
-            "请配置独立的 EMBEDDING_BASE_URL、EMBEDDING_API_KEY 和 EMBEDDING_MODEL 后重试知识库索引");
-      model =
-          OpenAiEmbeddingModel.builder()
-              .baseUrl(properties.getEmbeddingBaseUrl().trim())
-              .apiKey(properties.getEmbeddingApiKey().trim())
-              .modelName(properties.getEmbeddingModel().trim())
-              .timeout(Duration.ofSeconds(60))
-              .maxRetries(1)
-              .build();
+      if (isLocalModel(properties.getEmbeddingModel())) {
+        // 离线模型无需 baseUrl 与 apiKey；只有外部服务模式才要求三项都配置。
+        model =
+            new dev.langchain4j.model.embedding.onnx.allminilml6v2.AllMiniLmL6V2EmbeddingModel();
+      } else {
+        if (blank(properties.getEmbeddingBaseUrl())
+            || blank(properties.getEmbeddingApiKey())
+            || blank(properties.getEmbeddingModel()))
+          throw new IllegalStateException(
+              "请配置独立的 EMBEDDING_BASE_URL、EMBEDDING_API_KEY 和 EMBEDDING_MODEL 后重试知识库索引；"
+                  + "没有第三方向量服务时可以改为设置 EMBEDDING_MODEL=local 使用内置离线模型");
+        model =
+            OpenAiEmbeddingModel.builder()
+                .baseUrl(properties.getEmbeddingBaseUrl().trim())
+                .apiKey(properties.getEmbeddingApiKey().trim())
+                .modelName(properties.getEmbeddingModel().trim())
+                .timeout(Duration.ofSeconds(60))
+                .maxRetries(1)
+                .build();
+      }
     }
     return model;
   }
@@ -175,7 +193,16 @@ public class LocalVectorKnowledgeIndex {
     return value == null || value.isBlank();
   }
 
+  /**
+   * 向量索引的身份：模型与地址任一变化都必须重建索引，因为不同模型的向量空间不可混用。
+   *
+   * <p>本地离线模型与外部服务分别使用不同前缀（{@code local:} / {@code remote:}），
+   * 因此「外部服务」与「离线模型」之间来回切换同样会触发重建，不会把两种向量混进同一个库。
+   */
   private String identity() {
+    if (isLocalModel(properties.getEmbeddingModel())) {
+      return "langchain4j-v1:local:" + LOCAL_MODEL;
+    }
     String endpoint =
         Objects.toString(properties.getEmbeddingBaseUrl(), "").trim().replaceAll("/+$", "");
     try {
@@ -184,7 +211,7 @@ public class LocalVectorKnowledgeIndex {
               .formatHex(
                   java.security.MessageDigest.getInstance("SHA-256")
                       .digest(endpoint.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
-      return "langchain4j-v1:"
+      return "langchain4j-v1:remote:"
           + Objects.toString(properties.getEmbeddingModel(), "").trim()
           + ":"
           + fingerprint;

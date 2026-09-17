@@ -185,6 +185,8 @@ function signOut(message) {
     closeDraftModal();
     if (el('draftCompose')) el('draftCompose').hidden = true;
     if (el('viewDraft')) el('viewDraft').hidden = true;
+    // 文档轮询同样属于上一个账号的页面，必须停止。
+    stopDocumentPolling();
     // 对话上下文同样属于上一个账号，必须清空，否则下一个账号会看到上一段问答被当成草稿描述。
     assistantConversationId = null;
     lastAssistantQuestion = '';
@@ -343,6 +345,8 @@ async function dispatch() {
     // 也会让用户在下一条路由上看到上一页的草稿。已生成的草稿保留，可用「查看草稿」重新打开。
     closeDraftModal();
     if (el('draftCompose')) el('draftCompose').hidden = true;
+    // 离开知识库页面就停止文档轮询，避免在别的页面上继续发请求。
+    stopDocumentPolling();
     el('viewTitle').textContent = config.title;
     el('viewSubtitle').textContent = config.subtitle;
     markActiveNav(route);
@@ -1460,6 +1464,12 @@ async function renderKnowledge() {
         </div>`;
 
     if (selected) renderDocuments(documents, selected.id, Boolean(selected.writable));
+    // 有文档还在处理中时启动轮询；没有则确保上一次的定时器已停止（例如换库、重进页面）。
+    if (selected && documents.some(doc => doc.status === 'PROCESSING' || doc.status === 'DELETING')) {
+        pollDocumentStatus(selected.id, Boolean(selected.writable));
+    } else {
+        stopDocumentPolling();
+    }
 
     if (el('knowledgeViewer')) {
         el('knowledgeViewer').addEventListener('change', async event => {
@@ -1493,13 +1503,72 @@ async function renderKnowledge() {
 
 const DOCUMENT_LABELS = Object.freeze({ PROCESSING: '处理中', READY: '已就绪', FAILED: '处理失败', DELETING: '删除中' });
 
-function renderDocuments(documents, knowledgeBaseId, writable) {
+/** 文档后台处理是异步的：轮询只刷新文档区，避免整页重载打断用户操作。 */
+let documentPollTimer = null;
+let documentPollDeadline = 0;
+
+function stopDocumentPolling() {
+    if (documentPollTimer !== null) {
+        clearTimeout(documentPollTimer);
+        documentPollTimer = null;
+    }
+}
+
+/**
+ * 只要还有文档处于处理中/删除中，就按固定间隔重新拉取文档列表。
+ *
+ * <p>约束：只更新文档区域而不整页重载；有总时长上限，超时后停止并提示手动刷新；
+ * 切路由与登出都会停止（见 dispatch 与 signOut）。
+ */
+function pollDocumentStatus(knowledgeBaseId, writable) {
+    stopDocumentPolling();
+    documentPollDeadline = Date.now() + 120000;
+    const tick = async () => {
+        documentPollTimer = null;
+        if (Date.now() > documentPollDeadline) {
+            renderDocumentPollHint('后台处理时间较长，已停止自动刷新；可以手动刷新页面查看最新状态。');
+            return;
+        }
+        try {
+            const documents = await getJson(`/api/v1/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/documents`);
+            const pending = documents.some(doc => doc.status === 'PROCESSING' || doc.status === 'DELETING');
+            renderDocuments(documents, knowledgeBaseId, writable, {
+                fromPoll: true,
+                hint: pending ? '正在后台处理，状态会自动刷新。' : null
+            });
+            if (pending) documentPollTimer = setTimeout(tick, 2000);
+            else renderDocumentPollHint(null);
+        } catch (_) {
+            // 轮询失败不打扰用户：下一次仍会重试，超过总时长后自动停止。
+            documentPollTimer = setTimeout(tick, 3000);
+        }
+    };
+    documentPollTimer = setTimeout(tick, 2000);
+}
+
+/** 在文档区上方显示/清除自动刷新提示，让用户知道状态会自己更新，而不是页面卡住。 */
+function renderDocumentPollHint(text) {
+    const hint = el('documentPollHint');
+    if (!hint) return;
+    hint.textContent = text || '';
+    hint.hidden = !text;
+}
+
+/**
+ * 渲染文档表格。
+ *
+ * @param options.fromPoll 轮询触发的更新：跳过渲染竞态守卫（这是当前视图的主动刷新）
+ * @param options.hint     写在文档区顶部的提示文本（例如"正在后台处理，状态会自动刷新"）
+ */
+function renderDocuments(documents, knowledgeBaseId, writable, options = {}) {
+    if (!options.fromPoll && !isCurrentRender()) return;
     const area = el('documentArea');
     if (!documents.length) {
-        area.innerHTML = '<p class="muted">这个知识库里还没有文档。上传产品手册、开通说明或常见故障后，助手检索时会引用文件名和页码。</p>';
+        area.innerHTML = `<p class="muted" id="documentPollHint" hidden></p><p class="muted">这个知识库里还没有文档。上传产品手册、开通说明或常见故障后，助手检索时会引用文件名和页码。</p>`;
+        if (options.hint) renderDocumentPollHint(options.hint);
         return;
     }
-    area.innerHTML = `<div class="table-wrap"><table class="data-table">
+    area.innerHTML = `<p class="muted" id="documentPollHint" hidden></p><div class="table-wrap"><table class="data-table">
         <thead><tr><th>文件名</th><th>状态</th><th>片段</th><th>大小</th><th></th></tr></thead>
         <tbody>${documents.map(doc => `<tr>
             <td>${escapeHtml(doc.filename)}</td>
@@ -1511,6 +1580,8 @@ function renderDocuments(documents, knowledgeBaseId, writable) {
                 ${writable ? `<button class="button small danger" type="button" data-delete="${escapeHtml(doc.id)}">删除</button>` : ''}
             </div></td>
         </tr>`).join('')}</tbody></table></div>`;
+
+    if (options.hint) renderDocumentPollHint(options.hint);
 
     area.querySelectorAll('[data-retry]').forEach(button => button.addEventListener('click', async () => {
         setBusy(button, true);

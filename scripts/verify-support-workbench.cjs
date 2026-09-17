@@ -376,6 +376,35 @@ function sseEvent(type, data, sequence) {
     assert(await user.page.locator('#draftCompose').isHidden(), '取消后造草稿表单应已收起');
     assert(await user.page.locator('#assistantSend').isEnabled(), '取消后发送按钮应恢复可用');
 
+    // 文档状态自动刷新：用受控响应让文档先处于「处理中」再变为「已就绪」，
+    // 期间不做任何页面刷新，验证前端轮询能自己更新状态（后台处理是异步的，这原本要手动刷新）。
+    let documentPolls = 0;
+    await user.page.route('**/api/v1/knowledge-bases/*/documents', async route => {
+      if (route.request().method() !== 'GET') return route.continue();
+      documentPolls += 1;
+      const status = documentPolls === 1 ? 'PROCESSING' : 'READY';
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([
+          { id: 'browser-doc-1', filename: 'fictional-product-support.md', status, size: 2048, chunkCount: status === 'READY' ? 3 : null }
+        ])
+      });
+    });
+    await clickRoute(user.page, 'knowledge');
+    await user.page.getByText('处理中', { exact: true }).first().waitFor({ timeout: 15000 });
+    // 不刷新页面：轮询应在若干次请求内把状态换成「已就绪」。
+    await user.page.getByText('已就绪', { exact: true }).first().waitFor({ timeout: 20000 });
+    assert(documentPolls >= 2, `文档状态轮询没有重新请求（请求次数 ${documentPolls}）`);
+    // 完成后停止轮询：再等一段时间不应继续增加请求。
+    const pollsAfterReady = documentPolls;
+    await user.page.waitForTimeout(5000);
+    assert(
+      documentPolls === pollsAfterReady,
+      `文档就绪后不应继续轮询（${pollsAfterReady} -> ${documentPolls}）`
+    );
+    await user.page.unroute('**/api/v1/knowledge-bases/*/documents');
+
     const admin = await login(browser, 'zhida_demo_admin');
     opened.push(admin.context);
     for (const route of ['assignment', 'categories', 'catalog', 'knowledge']) {
@@ -385,7 +414,7 @@ function sseEvent(type, data, sequence) {
     assert((await admin.page.locator('#knowledgeViewer').inputValue()) === 'product-support', '管理员知识库默认项不是公共库');
     assert(await admin.page.locator('#uploadForm').isVisible(), '管理员不能维护公共知识库');
 
-    console.log('PASS 用户订单、结构化出处、长草稿确认、客服处理、用户退回/关闭评价、手动建单、管理端公共知识库');
+    console.log('PASS 用户订单、结构化出处、长草稿确认、客服处理、用户退回/关闭评价、手动建单、主动造草稿、文档状态自动刷新、管理端公共知识库');
   } finally {
     for (const context of opened) await context.close().catch(() => {});
     await browser.close();
