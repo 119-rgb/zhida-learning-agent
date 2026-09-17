@@ -405,6 +405,50 @@ function sseEvent(type, data, sequence) {
     );
     await user.page.unroute('**/api/v1/knowledge-bases/*/documents');
 
+    // 会话失效恢复：token 只在页面加载时读入内存变量，所以要写入无效 token 后重载页面，
+    // 模拟"本地还留着已过期的 JWT"。此时接口返回 401，页面必须回到登录态并清掉失效 token；
+    // 若只在代码里替换 sessionStorage 而不重载，请求带的仍是内存中的有效 token，测不出问题。
+    await user.page.evaluate(() => sessionStorage.setItem('zhida-token', 'invalid.expired.token'));
+    await user.page.reload({ waitUntil: 'networkidle' });
+    await user.page.locator('#authModal:not([hidden])').waitFor({ timeout: 15000 });
+    assert(
+      (await user.page.locator('#authStatus').innerText()).includes('登录状态已过期'),
+      '会话过期后应提示重新登录'
+    );
+    assert(
+      !(await user.page.evaluate(() => sessionStorage.getItem('zhida-token'))),
+      '会话过期后应清除失效 token'
+    );
+    // 重新登录，然后用"只让助手接口返回 401"的方式单独验证流式请求那条分支：
+    // 它绕过了 api()，必须自己处理 401。其余请求（身份/工单/知识库）保持正常，
+    // 模拟"本地 token 看起来还有效、但服务端已判定过期"的真实场景。
+    await user.page.locator('#username').fill('zhida_demo_user');
+    await user.page.locator('#password').fill(password);
+    await user.page.locator('button[value="login"]').click();
+    await user.page.locator('#nav .nav-item').first().waitFor();
+
+    await clickRoute(user.page, 'assistant');
+    await user.page.route('**/api/v1/support/assistant/stream', route =>
+      route.fulfill({ status: 401, contentType: 'application/json', body: '{}' })
+    );
+    await user.page.locator('#assistantInput').fill('这条消息应当因为会话失效而被拒绝');
+    await user.page.locator('#assistantSend').click();
+    await user.page.locator('#authModal:not([hidden])').waitFor({ timeout: 15000 });
+    assert(
+      (await user.page.locator('#authStatus').innerText()).includes('登录状态已过期'),
+      '助手接口返回 401 后应提示重新登录'
+    );
+    assert(
+      !(await user.page.evaluate(() => sessionStorage.getItem('zhida-token'))),
+      '助手接口返回 401 后应清除失效 token'
+    );
+    await user.page.unroute('**/api/v1/support/assistant/stream');
+    // 再次登录，供后面的管理端步骤使用。
+    await user.page.locator('#username').fill('zhida_demo_user');
+    await user.page.locator('#password').fill(password);
+    await user.page.locator('button[value="login"]').click();
+    await user.page.locator('#nav .nav-item').first().waitFor();
+
     const admin = await login(browser, 'zhida_demo_admin');
     opened.push(admin.context);
     for (const route of ['assignment', 'categories', 'catalog', 'knowledge']) {

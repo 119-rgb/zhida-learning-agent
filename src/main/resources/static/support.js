@@ -963,6 +963,13 @@ async function streamAssistant(message, answerNode, statusNode) {
         body: JSON.stringify({ message, conversationId: assistantConversationId, knowledgeBaseId: 'product-support' }),
         signal: assistantController.signal
     });
+    // 这条流式请求不能走 api()（需要直接拿 response.body 读 SSE），因此必须自己处理 401：
+    // 否则 JWT 过期后 token 会一直留在 sessionStorage，页面既不弹登录框也不清会话，
+    // 用户每发一条都只看到"助手请求失败（401）"，无从恢复。
+    if (response.status === 401) {
+        signOut('登录状态已过期，请重新登录。');
+        throw new ApiError(401, '登录状态已过期，请重新登录。');
+    }
     if (!response.ok || !response.body) {
         throw new ApiError(response.status, await readError(response, `助手请求失败（${response.status}）`));
     }
